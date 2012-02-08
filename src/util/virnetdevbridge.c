@@ -231,6 +231,17 @@ cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
 }
+#elif defined __FreeBSD__
+int virNetDevBridgeCreate(const char *brname)
+{
+	const char *ifcfgfmt = "/sbin/ifconfig %s create";
+	char cmdbuffer[64];
+	int ret = -1;
+
+	sprintf (cmdbuffer, ifcfgfmt, brname);
+	ret = system (cmdbuffer);
+    return ret;
+}
 #else
 int virNetDevBridgeCreate(const char *brname)
 {
@@ -267,6 +278,17 @@ int virNetDevBridgeDelete(const char *brname)
 
 cleanup:
     VIR_FORCE_CLOSE(fd);
+    return ret;
+}
+#elif defined __FreeBSD__
+int virNetDevBridgeDelete(const char *brname)
+{
+	const char *ifcfgfmt = "/sbin/ifconfig %s destroy";
+	char cmdbuffer[64];
+	int ret = -1;
+
+	sprintf (cmdbuffer, ifcfgfmt, brname);
+	ret = system (cmdbuffer);
     return ret;
 }
 #else
