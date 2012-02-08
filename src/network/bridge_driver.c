@@ -41,6 +41,9 @@
 #include <stdio.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#ifdef __FreeBSD__
+#include <sys/socket.h>
+#endif
 #include <net/if.h>
 
 #include "virterror_internal.h"
