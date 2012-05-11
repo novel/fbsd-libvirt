@@ -833,7 +833,7 @@ virStorageFileGetMetadataFromFD(const char *path,
     int ret = -1;
     struct stat sb;
 
-    memset(meta, 0, sizeof (*meta));
+    memset(meta, 0, sizeof(*meta));
 
     if (fstat(fd, &sb) < 0) {
         virReportSystemError(errno,
@@ -939,12 +939,29 @@ virStorageFileFreeMetadata(virStorageFileMetadata *meta)
 int
 virStorageFileResize(const char *path, unsigned long long capacity)
 {
-    if (truncate(path, capacity) < 0) {
-        virReportSystemError(errno, _("Failed to truncate file '%s'"), path);
-        return -1;
+    int fd = -1;
+    int ret = -1;
+
+    if ((fd = open(path, O_RDWR)) < 0) {
+        virReportSystemError(errno, _("Unable to open '%s'"), path);
+        goto cleanup;
     }
 
-    return 0;
+    if (ftruncate(fd, capacity) < 0) {
+        virReportSystemError(errno, _("Failed to truncate file '%s'"), path);
+        goto cleanup;
+    }
+
+    if (VIR_CLOSE(fd) < 0) {
+        virReportSystemError(errno, _("Unable to save '%s'"), path);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    VIR_FORCE_CLOSE(fd);
+    return ret;
 }
 
 #ifdef __linux__
@@ -1045,4 +1062,14 @@ int virStorageFileIsSharedFS(const char *path)
                                         VIR_STORAGE_FILE_SHFS_GFS2 |
                                         VIR_STORAGE_FILE_SHFS_OCFS |
                                         VIR_STORAGE_FILE_SHFS_AFS);
+}
+
+int virStorageFileIsClusterFS(const char *path)
+{
+    /* These are coherent cluster filesystems known to be safe for
+     * migration with cache != none
+     */
+    return virStorageFileIsSharedFSType(path,
+                                        VIR_STORAGE_FILE_SHFS_GFS2 |
+                                        VIR_STORAGE_FILE_SHFS_OCFS);
 }

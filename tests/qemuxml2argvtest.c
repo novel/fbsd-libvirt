@@ -50,8 +50,10 @@ fakeSecretLookupByUsage(virConnectPtr conn,
     ret->magic = VIR_SECRET_MAGIC;
     ret->refs = 1;
     ret->usageID = strdup(usageID);
-    if (!ret->usageID)
+    if (!ret->usageID) {
+        VIR_FREE(ret);
         return NULL;
+    }
     ret->conn = conn;
     conn->refs++;
     return ret;
@@ -314,7 +316,7 @@ mymain(void)
 # define DO_TEST_FULL(name, migrateFrom, migrateFd,                     \
                       expectError, expectFailure, ...)                  \
     do {                                                                \
-        struct testInfo info = {                                        \
+        static struct testInfo info = {                                 \
             name, NULL, migrateFrom, migrateFd,                         \
             expectError, expectFailure                                  \
         };                                                              \
@@ -392,7 +394,13 @@ mymain(void)
     DO_TEST("hugepages", false, QEMU_CAPS_MEM_PATH);
     DO_TEST("disk-cdrom", false, NONE);
     DO_TEST("disk-cdrom-empty", false, QEMU_CAPS_DRIVE);
+    DO_TEST("disk-cdrom-tray", false,
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_VIRTIO_TX_ALG);
+    DO_TEST("disk-cdrom-tray-no-device-cap", false, NONE);
     DO_TEST("disk-floppy", false, NONE);
+    DO_TEST("disk-floppy-tray-no-device-cap", false, NONE);
+    DO_TEST("disk-floppy-tray", false,
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE);
     DO_TEST("disk-many", false, NONE);
     DO_TEST("disk-virtio", false, QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_BOOT);
     DO_TEST("disk-order", false,
@@ -457,6 +465,9 @@ mymain(void)
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
     DO_TEST("disk-scsi-device-auto", false,
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
+    DO_TEST("disk-scsi-disk-split", false,
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_SCSI_CD);
     DO_TEST("disk-scsi-vscsi", false,
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
     DO_TEST("disk-scsi-virtio-scsi", false,
@@ -487,6 +498,10 @@ mymain(void)
             QEMU_CAPS_DRIVE,
             QEMU_CAPS_DEVICE,
             QEMU_CAPS_VIRTIO_BLK_SCSI, QEMU_CAPS_VIRTIO_BLK_SG_IO);
+    DO_TEST("disk-scsi-lun-passthrough", false,
+            QEMU_CAPS_DRIVE,
+            QEMU_CAPS_DEVICE,
+            QEMU_CAPS_SCSI_BLOCK, QEMU_CAPS_VIRTIO_BLK_SG_IO);
 
     DO_TEST("graphics-vnc", false, NONE);
     DO_TEST("graphics-vnc-socket", false, NONE);
@@ -511,6 +526,11 @@ mymain(void)
     DO_TEST("graphics-spice", false,
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
             QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE);
+    DO_TEST("graphics-spice-agentmouse", false,
+            QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
+            QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
+            QEMU_CAPS_CHARDEV_SPICEVMC,
+            QEMU_CAPS_NODEFCONFIG);
     DO_TEST("graphics-spice-compression", false,
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
             QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE);
@@ -523,6 +543,12 @@ mymain(void)
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
             QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
             QEMU_CAPS_DEVICE_QXL_VGA);
+    DO_TEST("graphics-spice-usb-redir", false,
+            QEMU_CAPS_VGA, QEMU_CAPS_SPICE,
+            QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_PCI_MULTIFUNCTION, QEMU_CAPS_USB_HUB,
+            QEMU_CAPS_ICH9_USB_EHCI1, QEMU_CAPS_USB_REDIR,
+            QEMU_CAPS_CHARDEV_SPICEVMC);
 
     DO_TEST("input-usbmouse", false, NONE);
     DO_TEST("input-usbtablet", false, NONE);
@@ -542,6 +568,8 @@ mymain(void)
     DO_TEST("net-client", false, NONE);
     DO_TEST("net-server", false, NONE);
     DO_TEST("net-mcast", false, NONE);
+    DO_TEST("net-hostdev", false,
+            QEMU_CAPS_PCIDEVICE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
 
     DO_TEST("serial-vc", false, NONE);
     DO_TEST("serial-pty", false, NONE);
@@ -710,6 +738,11 @@ mymain(void)
     DO_TEST("blkiotune-device", false, QEMU_CAPS_NAME);
     DO_TEST("cputune", false, QEMU_CAPS_NAME);
     DO_TEST("numatune-memory", false, NONE);
+    DO_TEST("numad", false, NONE);
+    DO_TEST("numad-auto-vcpu-static-numatune", false, NONE);
+    DO_TEST("numad-auto-memory-vcpu-cpuset", false, NONE);
+    DO_TEST("numad-auto-memory-vcpu-no-cpuset-and-placement", false, NONE);
+    DO_TEST("numad-static-memory-auto-vcpu", false, NONE);
     DO_TEST("blkdeviotune", false, QEMU_CAPS_NAME, QEMU_CAPS_DEVICE,
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_IOTUNE);
 
@@ -738,12 +771,15 @@ mymain(void)
             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
     DO_TEST("pseries-vio-address-clash", true, QEMU_CAPS_DRIVE,
             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
+    DO_TEST("disk-ide-drive-split", false,
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_IDE_CD);
 
     VIR_FREE(driver.stateDir);
     virCapabilitiesFree(driver.caps);
     VIR_FREE(map);
 
-    return(ret==0 ? EXIT_SUCCESS : EXIT_FAILURE);
+    return ret==0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 VIRT_TEST_MAIN(mymain)

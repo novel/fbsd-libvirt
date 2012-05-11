@@ -83,7 +83,7 @@
 
 
 # define NUL_TERMINATE(buf) do { (buf)[sizeof(buf)-1] = '\0'; } while (0)
-# define ARRAY_CARDINALITY(Array) (sizeof (Array) / sizeof *(Array))
+# define ARRAY_CARDINALITY(Array) (sizeof(Array) / sizeof(*(Array)))
 
 /* C99 uses __func__.  __FUNCTION__ is legacy. */
 # ifndef __GNUC__
@@ -182,7 +182,7 @@
 #  endif
 
 #  ifndef ATTRIBUTE_NONNULL
-#   if __GNUC_PREREQ (3, 3)
+#   if __GNUC_PREREQ (3, 3) && STATIC_ANALYSIS
 #    define ATTRIBUTE_NONNULL(m) __attribute__((__nonnull__(m)))
 #   else
 #    define ATTRIBUTE_NONNULL(m)
@@ -205,7 +205,7 @@
  * Use this when passing possibly-NULL strings to printf-a-likes.
  */
 # define NULLSTR(s) \
-    ((void)verify_true(sizeof *(s) == sizeof (char)), \
+    ((void)verify_true(sizeof(*(s)) == sizeof(char)),   \
      (s) ? (s) : "(null)")
 
 /**
@@ -247,7 +247,7 @@
 # define VIR_DIV_UP(value, size) (((value) + (size) - 1) / (size))
 
 
-# if WITH_DTRACE
+# if WITH_DTRACE_PROBES
 #  ifndef LIBVIRT_PROBES_H
 #   define LIBVIRT_PROBES_H
 #   include "probes.h"

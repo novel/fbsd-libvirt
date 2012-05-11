@@ -68,7 +68,7 @@ virXPathString(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathString()"));
-        return (NULL);
+        return NULL;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
@@ -76,14 +76,14 @@ virXPathString(const char *xpath,
     if ((obj == NULL) || (obj->type != XPATH_STRING) ||
         (obj->stringval == NULL) || (obj->stringval[0] == 0)) {
         xmlXPathFreeObject(obj);
-        return (NULL);
+        return NULL;
     }
     ret = strdup((char *) obj->stringval);
     xmlXPathFreeObject(obj);
     if (ret == NULL) {
         virReportOOMError();
     }
-    return (ret);
+    return ret;
 }
 
 /**
@@ -107,7 +107,7 @@ virXPathStringLimit(const char *xpath,
 
     if (tmp != NULL && strlen(tmp) >= maxlen) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
-                    _("\'%s\' value longer than %zd bytes"),
+                    _("\'%s\' value longer than %zu bytes"),
                     xpath, maxlen);
         VIR_FREE(tmp);
         return NULL;
@@ -138,7 +138,7 @@ virXPathNumber(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL) || (value == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathNumber()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
@@ -146,12 +146,12 @@ virXPathNumber(const char *xpath,
     if ((obj == NULL) || (obj->type != XPATH_NUMBER) ||
         (isnan(obj->floatval))) {
         xmlXPathFreeObject(obj);
-        return (-1);
+        return -1;
     }
 
     *value = obj->floatval;
     xmlXPathFreeObject(obj);
-    return (0);
+    return 0;
 }
 
 static int
@@ -167,22 +167,15 @@ virXPathLongBase(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL) || (value == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathLong()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
     ctxt->node = relnode;
     if ((obj != NULL) && (obj->type == XPATH_STRING) &&
         (obj->stringval != NULL) && (obj->stringval[0] != 0)) {
-        char *conv = NULL;
-        long val;
-
-        val = strtol((const char *) obj->stringval, &conv, base);
-        if (conv == (const char *) obj->stringval) {
+        if (virStrToLong_l((char *) obj->stringval, NULL, base, value) < 0)
             ret = -2;
-        } else {
-            *value = val;
-        }
     } else if ((obj != NULL) && (obj->type == XPATH_NUMBER) &&
                (!(isnan(obj->floatval)))) {
         *value = (long) obj->floatval;
@@ -194,7 +187,7 @@ virXPathLongBase(const char *xpath,
     }
 
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 /**
@@ -280,22 +273,15 @@ virXPathULongBase(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL) || (value == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathULong()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
     ctxt->node = relnode;
     if ((obj != NULL) && (obj->type == XPATH_STRING) &&
         (obj->stringval != NULL) && (obj->stringval[0] != 0)) {
-        char *conv = NULL;
-        long val;
-
-        val = strtoul((const char *) obj->stringval, &conv, base);
-        if (conv == (const char *) obj->stringval) {
+        if (virStrToLong_ul((char *) obj->stringval, NULL, base, value) < 0)
             ret = -2;
-        } else {
-            *value = val;
-        }
     } else if ((obj != NULL) && (obj->type == XPATH_NUMBER) &&
                (!(isnan(obj->floatval)))) {
         *value = (unsigned long) obj->floatval;
@@ -307,7 +293,7 @@ virXPathULongBase(const char *xpath,
     }
 
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 /**
@@ -404,22 +390,15 @@ virXPathULongLong(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL) || (value == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathULong()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
     ctxt->node = relnode;
     if ((obj != NULL) && (obj->type == XPATH_STRING) &&
         (obj->stringval != NULL) && (obj->stringval[0] != 0)) {
-        char *conv = NULL;
-        unsigned long long val;
-
-        val = strtoull((const char *) obj->stringval, &conv, 10);
-        if (conv == (const char *) obj->stringval) {
+        if (virStrToLong_ull((char *) obj->stringval, NULL, 10, value) < 0)
             ret = -2;
-        } else {
-            *value = val;
-        }
     } else if ((obj != NULL) && (obj->type == XPATH_NUMBER) &&
                (!(isnan(obj->floatval)))) {
         *value = (unsigned long long) obj->floatval;
@@ -431,7 +410,7 @@ virXPathULongLong(const char *xpath,
     }
 
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 /**
@@ -458,22 +437,15 @@ virXPathLongLong(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL) || (value == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathLongLong()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
     ctxt->node = relnode;
     if ((obj != NULL) && (obj->type == XPATH_STRING) &&
         (obj->stringval != NULL) && (obj->stringval[0] != 0)) {
-        char *conv = NULL;
-        unsigned long long val;
-
-        val = strtoll((const char *) obj->stringval, &conv, 10);
-        if (conv == (const char *) obj->stringval) {
+        if (virStrToLong_ll((char *) obj->stringval, NULL, 10, value) < 0)
             ret = -2;
-        } else {
-            *value = val;
-        }
     } else if ((obj != NULL) && (obj->type == XPATH_NUMBER) &&
                (!(isnan(obj->floatval)))) {
         *value = (long long) obj->floatval;
@@ -485,7 +457,7 @@ virXPathLongLong(const char *xpath,
     }
 
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 char *
@@ -515,7 +487,7 @@ virXPathBoolean(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathBoolean()"));
-        return (-1);
+        return -1;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
@@ -523,12 +495,12 @@ virXPathBoolean(const char *xpath,
     if ((obj == NULL) || (obj->type != XPATH_BOOLEAN) ||
         (obj->boolval < 0) || (obj->boolval > 1)) {
         xmlXPathFreeObject(obj);
-        return (-1);
+        return -1;
     }
     ret = obj->boolval;
 
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 /**
@@ -552,7 +524,7 @@ virXPathNode(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathNode()"));
-        return (NULL);
+        return NULL;
     }
     relnode = ctxt->node;
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
@@ -561,12 +533,12 @@ virXPathNode(const char *xpath,
         (obj->nodesetval == NULL) || (obj->nodesetval->nodeNr <= 0) ||
         (obj->nodesetval->nodeTab == NULL)) {
         xmlXPathFreeObject(obj);
-        return (NULL);
+        return NULL;
     }
 
     ret = obj->nodesetval->nodeTab[0];
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 /**
@@ -592,7 +564,7 @@ virXPathNodeSet(const char *xpath,
     if ((ctxt == NULL) || (xpath == NULL)) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     "%s", _("Invalid parameter to virXPathNodeSet()"));
-        return (-1);
+        return -1;
     }
 
     if (list != NULL)
@@ -602,18 +574,18 @@ virXPathNodeSet(const char *xpath,
     obj = xmlXPathEval(BAD_CAST xpath, ctxt);
     ctxt->node = relnode;
     if (obj == NULL)
-        return(0);
+        return 0;
 
     if (obj->type != XPATH_NODESET) {
         virXMLError(VIR_ERR_INTERNAL_ERROR,
                     _("Incorrect xpath '%s'"), xpath);
         xmlXPathFreeObject(obj);
-        return (-1);
+        return -1;
     }
 
     if ((obj->nodesetval == NULL)  || (obj->nodesetval->nodeNr < 0)) {
         xmlXPathFreeObject(obj);
-        return (0);
+        return 0;
     }
 
     ret = obj->nodesetval->nodeNr;
@@ -627,7 +599,7 @@ virXPathNodeSet(const char *xpath,
         }
     }
     xmlXPathFreeObject(obj);
-    return (ret);
+    return ret;
 }
 
 

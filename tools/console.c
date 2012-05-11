@@ -34,6 +34,7 @@
 # include <errno.h>
 # include <unistd.h>
 # include <signal.h>
+# include <c-ctype.h>
 
 # include "internal.h"
 # include "console.h"
@@ -292,14 +293,15 @@ static char
 vshGetEscapeChar(const char *s)
 {
     if (*s == '^')
-        return CONTROL(s[1]);
+        return CONTROL(c_toupper(s[1]));
 
     return *s;
 }
 
 int vshRunConsole(virDomainPtr dom,
                   const char *dev_name,
-                  const char *escape_seq)
+                  const char *escape_seq,
+                  unsigned int flags)
 {
     int ret = -1;
     struct termios ttyattr, rawattr;
@@ -353,7 +355,7 @@ int vshRunConsole(virDomainPtr dom,
     if (!con->st)
         goto cleanup;
 
-    if (virDomainOpenConsole(dom, dev_name, con->st, 0) < 0)
+    if (virDomainOpenConsole(dom, dev_name, con->st, flags) < 0)
         goto cleanup;
 
     if (virCondInit(&con->cond) < 0 || virMutexInit(&con->lock) < 0)

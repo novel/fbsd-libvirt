@@ -407,7 +407,7 @@ esxStoragePoolGetInfo(virStoragePoolPtr pool, virStoragePoolInfoPtr info)
     esxVI_DynamicProperty *dynamicProperty = NULL;
     esxVI_Boolean accessible = esxVI_Boolean_Undefined;
 
-    memset(info, 0, sizeof (*info));
+    memset(info, 0, sizeof(*info));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return -1;
@@ -479,7 +479,7 @@ esxStoragePoolGetXMLDesc(virStoragePoolPtr pool, unsigned int flags)
 
     virCheckFlags(0, NULL);
 
-    memset(&def, 0, sizeof (def));
+    memset(&def, 0, sizeof(def));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return NULL;
@@ -544,8 +544,12 @@ esxStoragePoolGetXMLDesc(virStoragePoolPtr pool, unsigned int flags)
     if (esxVI_LocalDatastoreInfo_DynamicCast(info) != NULL) {
         def.type = VIR_STORAGE_POOL_DIR;
     } else if ((nasInfo = esxVI_NasDatastoreInfo_DynamicCast(info)) != NULL) {
+        if (VIR_ALLOC_N(def.source.hosts, 1) < 0) {
+            virReportOOMError();
+            goto cleanup;
+        }
         def.type = VIR_STORAGE_POOL_NETFS;
-        def.source.host.name = nasInfo->nas->remoteHost;
+        def.source.hosts[0].name = nasInfo->nas->remoteHost;
         def.source.dir = nasInfo->nas->remotePath;
 
         if (STRCASEEQ(nasInfo->nas->type, "NFS")) {
@@ -977,7 +981,7 @@ esxStorageVolumeCreateXML(virStoragePoolPtr pool, const char *xmldesc,
 
     virCheckFlags(0, NULL);
 
-    memset(&poolDef, 0, sizeof (poolDef));
+    memset(&poolDef, 0, sizeof(poolDef));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return NULL;
@@ -1205,7 +1209,7 @@ esxStorageVolumeCreateXMLFrom(virStoragePoolPtr pool, const char *xmldesc,
 
     virCheckFlags(0, NULL);
 
-    memset(&poolDef, 0, sizeof (poolDef));
+    memset(&poolDef, 0, sizeof(poolDef));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return NULL;
@@ -1483,7 +1487,7 @@ esxStorageVolumeGetInfo(virStorageVolPtr volume, virStorageVolInfoPtr info)
     esxVI_FileInfo *fileInfo = NULL;
     esxVI_VmDiskFileInfo *vmDiskFileInfo = NULL;
 
-    memset(info, 0, sizeof (*info));
+    memset(info, 0, sizeof(*info));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return -1;
@@ -1538,8 +1542,8 @@ esxStorageVolumeGetXMLDesc(virStorageVolPtr volume, unsigned int flags)
 
     virCheckFlags(0, NULL);
 
-    memset(&pool, 0, sizeof (pool));
-    memset(&def, 0, sizeof (def));
+    memset(&pool, 0, sizeof(pool));
+    memset(&def, 0, sizeof(def));
 
     if (esxVI_EnsureSession(priv->primary) < 0) {
         return NULL;

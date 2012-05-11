@@ -18,7 +18,7 @@ provider libvirt {
 
 	# file: src/rpc/virnetsocket.c
 	# prefix: rpc
-	probe rpc_socket_new(void *sock, int refs, int fd, int errfd, int pid, const char *localAddr, const char *remoteAddr);
+	probe rpc_socket_new(void *sock, int refs, int fd, int errfd, pid_t pid, const char *localAddr, const char *remoteAddr);
 	probe rpc_socket_send_fd(void *sock, int fd);
 	probe rpc_socket_recv_fd(void *sock, int fd);
 	probe rpc_socket_ref(void *sock, int refs);
@@ -78,7 +78,7 @@ provider libvirt {
 	probe rpc_keepalive_ref(void *ka, void *client, int refs);
 	probe rpc_keepalive_free(void *ka, void *client, int refs);
 	probe rpc_keepalive_start(void *ka, void *client, int interval, int count);
-	probe rpc_keepalive_stop(void *ka, void *client);
+	probe rpc_keepalive_stop(void *ka, void *client, bool all);
 	probe rpc_keepalive_send(void *ka, void *client, int prog, int vers, int proc);
 	probe rpc_keepalive_received(void *ka, void *client, int prog, int vers, int proc);
 	probe rpc_keepalive_timeout(void *ka, void *client, int coundToDeath, int idle);

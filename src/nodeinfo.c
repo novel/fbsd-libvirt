@@ -1,7 +1,7 @@
 /*
  * nodeinfo.c: Helper routines for OS specific node information
  *
- * Copyright (C) 2006-2008, 2010-2011 Red Hat, Inc.
+ * Copyright (C) 2006-2008, 2010-2012 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -31,6 +31,7 @@
 #include <dirent.h>
 #include <sys/utsname.h>
 #include <sched.h>
+#include "conf/domain_conf.h"
 
 #if HAVE_NUMACTL
 # define NUMA_VERSION1_COMPATIBILITY 1
@@ -206,7 +207,7 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
     DIR *cpudir = NULL;
     struct dirent *cpudirent = NULL;
     unsigned int cpu;
-    unsigned long core, socket, cur_threads;
+    unsigned long core, sock, cur_threads;
     cpu_set_t core_mask;
     cpu_set_t socket_mask;
     int online;
@@ -230,10 +231,10 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
 
     /* NOTE: hyperthreads are ignored here; they are parsed out of /sys */
     while (fgets(line, sizeof(line), cpuinfo) != NULL) {
-        char *buf = line;
 # if defined(__x86_64__) || \
     defined(__amd64__)  || \
     defined(__i386__)
+        char *buf = line;
         if (STRPREFIX(buf, "cpu MHz")) {
             char *p;
             unsigned int ui;
@@ -252,6 +253,7 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
         }
 # elif defined(__powerpc__) || \
       defined(__powerpc64__)
+        char *buf = line;
         if (STRPREFIX(buf, "clock")) {
             char *p;
             unsigned int ui;
@@ -311,9 +313,9 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
         }
 
         /* Parse socket */
-        socket = parse_socket(cpu);
-        if (!CPU_ISSET(socket, &socket_mask)) {
-            CPU_SET(socket, &socket_mask);
+        sock = parse_socket(cpu);
+        if (!CPU_ISSET(sock, &socket_mask)) {
+            CPU_SET(sock, &socket_mask);
             nodeinfo->sockets++;
         }
 
@@ -569,6 +571,48 @@ int linuxNodeGetMemoryStats(FILE *meminfo,
 cleanup:
     return ret;
 }
+
+/*
+ * Linux maintains cpu bit map. For example, if cpuid=5's flag is not set
+ * and max cpu is 7. The map file shows 0-4,6-7. This function parses
+ * it and returns cpumap.
+ */
+static char *
+linuxParseCPUmap(int *max_cpuid, const char *path)
+{
+    char *map = NULL;
+    char *str = NULL;
+    int max_id = 0, i;
+
+    if (virFileReadAll(path, 5 * VIR_DOMAIN_CPUMASK_LEN, &str) < 0) {
+        virReportOOMError();
+        goto error;
+    }
+
+    if (VIR_ALLOC_N(map, VIR_DOMAIN_CPUMASK_LEN) < 0) {
+        virReportOOMError();
+        goto error;
+    }
+    if (virDomainCpuSetParse(str, 0, map,
+                             VIR_DOMAIN_CPUMASK_LEN) < 0) {
+        goto error;
+    }
+
+    for (i = 0; i < VIR_DOMAIN_CPUMASK_LEN; i++) {
+        if (map[i]) {
+            max_id = i;
+        }
+    }
+    *max_cpuid = max_id;
+
+    VIR_FREE(str);
+    return map;
+
+error:
+    VIR_FREE(str);
+    VIR_FREE(map);
+    return NULL;
+}
 #endif
 
 int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
@@ -582,8 +626,8 @@ int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
 
 #ifdef __linux__
     {
-    int ret;
-    char *sysfs_cpuinfo;
+    int ret = -1;
+    char *sysfs_cpuinfo = NULL;
     FILE *cpuinfo = fopen(CPUINFO_PATH, "r");
     if (!cpuinfo) {
         virReportSystemError(errno,
@@ -593,20 +637,19 @@ int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
 
     if (virAsprintf(&sysfs_cpuinfo, CPU_SYS_PATH) < 0) {
         virReportOOMError();
-        return -1;
+        goto cleanup;
     }
 
     ret = linuxNodeInfoCPUPopulate(cpuinfo, sysfs_cpuinfo, nodeinfo);
-    VIR_FORCE_FCLOSE(cpuinfo);
-    if (ret < 0) {
-        VIR_FREE(sysfs_cpuinfo);
-        return -1;
-    }
+    if (ret < 0)
+        goto cleanup;
 
-    VIR_FREE(sysfs_cpuinfo);
     /* Convert to KB. */
     nodeinfo->memory = physmem_total () / 1024;
 
+cleanup:
+    VIR_FORCE_FCLOSE(cpuinfo);
+    VIR_FREE(sysfs_cpuinfo);
     return ret;
     }
 #else
@@ -712,6 +755,30 @@ int nodeGetMemoryStats(virConnectPtr conn ATTRIBUTE_UNUSED,
 #endif
 }
 
+char *
+nodeGetCPUmap(virConnectPtr conn ATTRIBUTE_UNUSED,
+              int *max_id ATTRIBUTE_UNUSED,
+              const char *mapname ATTRIBUTE_UNUSED)
+{
+#ifdef __linux__
+    char *path;
+    char *cpumap;
+
+    if (virAsprintf(&path, CPU_SYS_PATH "/%s", mapname) < 0) {
+        virReportOOMError();
+        return NULL;
+    }
+
+    cpumap = linuxParseCPUmap(max_id, path);
+    VIR_FREE(path);
+    return cpumap;
+#else
+    nodeReportError(VIR_ERR_NO_SUPPORT, "%s",
+                    _("node cpumap not implemented on this platform"));
+    return NULL;
+#endif
+}
+
 #if HAVE_NUMACTL
 # if LIBNUMA_API_VERSION <= 1
 #  define NUMA_MAX_N_CPUS 4096
@@ -737,9 +804,9 @@ nodeCapsInitNUMA(virCapsPtr caps)
         return 0;
 
     int mask_n_bytes = max_n_cpus / 8;
-    if (VIR_ALLOC_N(mask, mask_n_bytes / sizeof *mask) < 0)
+    if (VIR_ALLOC_N(mask, mask_n_bytes / sizeof(*mask)) < 0)
         goto cleanup;
-    if (VIR_ALLOC_N(allonesmask, mask_n_bytes / sizeof *mask) < 0)
+    if (VIR_ALLOC_N(allonesmask, mask_n_bytes / sizeof(*mask)) < 0)
         goto cleanup;
     memset(allonesmask, 0xff, mask_n_bytes);
 

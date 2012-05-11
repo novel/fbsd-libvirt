@@ -1,7 +1,7 @@
 /*
  * xen_driver.c: Unified Xen driver.
  *
- * Copyright (C) 2007-2011 Red Hat, Inc.
+ * Copyright (C) 2007-2012 Red Hat, Inc.
  *
  * See COPYING.LIB for the License of this software
  *
@@ -26,7 +26,6 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <xen/dom0_ops.h>
-#include <libxml/uri.h>
 
 #include "virterror_internal.h"
 #include "logging.h"
@@ -50,6 +49,7 @@
 #include "uuid.h"
 #include "fdstream.h"
 #include "virfile.h"
+#include "viruri.h"
 #include "command.h"
 #include "virnodesuspend.h"
 
@@ -135,17 +135,17 @@ xenDomainUsedCpus(virDomainPtr dom)
     xenUnifiedPrivatePtr priv;
 
     if (!VIR_IS_CONNECTED_DOMAIN(dom))
-        return (NULL);
+        return NULL;
 
     priv = dom->conn->privateData;
 
     if (priv->nbNodeCpus <= 0)
-        return(NULL);
+        return NULL;
     nb_vcpu = xenUnifiedDomainGetMaxVcpus(dom);
     if (nb_vcpu <= 0)
-        return(NULL);
+        return NULL;
     if (xenUnifiedNodeGetInfo(dom->conn, &nodeinfo) < 0)
-        return(NULL);
+        return NULL;
 
     if (VIR_ALLOC_N(cpulist, priv->nbNodeCpus) < 0) {
         virReportOOMError();
@@ -184,7 +184,7 @@ done:
     VIR_FREE(cpulist);
     VIR_FREE(cpumap);
     VIR_FREE(cpuinfo);
-    return(res);
+    return res;
 }
 
 #ifdef WITH_LIBVIRTD
@@ -270,11 +270,8 @@ xenUnifiedOpen (virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
         if (!xenUnifiedProbe())
             return VIR_DRV_OPEN_DECLINED;
 
-        conn->uri = xmlParseURI("xen:///");
-        if (!conn->uri) {
-            virReportOOMError();
+        if (!(conn->uri = virURIParse("xen:///")))
             return VIR_DRV_OPEN_ERROR;
-        }
     } else {
         if (conn->uri->scheme) {
             /* Decline any scheme which isn't "xen://" or "http://". */
@@ -937,12 +934,12 @@ xenUnifiedDomainGetOSType (virDomainPtr dom)
     return NULL;
 }
 
-static unsigned long
+static unsigned long long
 xenUnifiedDomainGetMaxMemory (virDomainPtr dom)
 {
     GET_PRIVATE(dom->conn);
     int i;
-    unsigned long ret;
+    unsigned long long ret;
 
     for (i = 0; i < XEN_UNIFIED_NR_DRIVERS; ++i)
         if (priv->opened[i] && drivers[i]->xenDomainGetMaxMemory) {
@@ -1250,7 +1247,7 @@ xenUnifiedDomainGetXMLDesc(virDomainPtr dom, unsigned int flags)
             xenUnifiedUnlock(priv);
             res = xenDaemonDomainGetXMLDesc(dom, flags, cpus);
             VIR_FREE(cpus);
-            return(res);
+            return res;
         }
     }
 
@@ -1682,10 +1679,10 @@ xenUnifiedDomainGetSchedulerType (virDomainPtr dom, int *nparams)
         if (priv->opened[i] && drivers[i]->xenDomainGetSchedulerType) {
             schedulertype = drivers[i]->xenDomainGetSchedulerType (dom, nparams);
             if (schedulertype != NULL)
-                return(schedulertype);
+                return schedulertype;
         }
     }
-    return(NULL);
+    return NULL;
 }
 
 static int
@@ -1703,10 +1700,10 @@ xenUnifiedDomainGetSchedulerParametersFlags(virDomainPtr dom,
         if (priv->opened[i] && drivers[i]->xenDomainGetSchedulerParameters) {
            ret = drivers[i]->xenDomainGetSchedulerParameters(dom, params, nparams);
            if (ret == 0)
-               return(0);
+               return 0;
         }
     }
-    return(-1);
+    return -1;
 }
 
 static int
@@ -1738,7 +1735,7 @@ xenUnifiedDomainSetSchedulerParametersFlags(virDomainPtr dom,
         }
     }
 
-    return(-1);
+    return -1;
 }
 
 static int
@@ -1826,12 +1823,12 @@ xenUnifiedNodeGetFreeMemory (virConnectPtr conn)
         ret = xenHypervisorNodeGetCellsFreeMemory (conn, &freeMem,
                                                     -1, 1);
         if (ret != 1)
-            return (0);
-        return(freeMem);
+            return 0;
+        return freeMem;
     }
 
     xenUnifiedError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
-    return(0);
+    return 0;
 }
 
 
@@ -1856,7 +1853,7 @@ xenUnifiedDomainEventRegister(virConnectPtr conn,
                                       callback, opaque, freefunc);
 
     xenUnifiedUnlock(priv);
-    return (ret);
+    return ret;
 }
 
 
@@ -1908,7 +1905,7 @@ xenUnifiedDomainEventRegisterAny(virConnectPtr conn,
         ret = -1;
 
     xenUnifiedUnlock(priv);
-    return (ret);
+    return ret;
 }
 
 static int
@@ -1950,7 +1947,7 @@ xenUnifiedNodeDeviceGetPciInfo (virNodeDevicePtr dev,
     if (!xml)
         goto out;
 
-    def = virNodeDeviceDefParseString(xml, EXISTING_DEVICE);
+    def = virNodeDeviceDefParseString(xml, EXISTING_DEVICE, NULL);
     if (!def)
         goto out;
 

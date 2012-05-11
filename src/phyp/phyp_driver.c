@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2011 Red Hat, Inc.
+ * Copyright (C) 2010-2012 Red Hat, Inc.
  * Copyright IBM Corp. 2009
  *
  * phyp_driver.c: ssh layer to access Power Hypervisors
@@ -44,7 +44,7 @@
 #include <domain_event.h>
 
 #include "internal.h"
-#include "authhelper.h"
+#include "virauth.h"
 #include "util.h"
 #include "datatypes.h"
 #include "buf.h"
@@ -491,7 +491,7 @@ phypUUIDTable_Push(virConnectPtr conn)
     struct stat local_fileinfo;
     char buffer[1024];
     int rc = 0;
-    FILE *fd;
+    FILE *fd = NULL;
     size_t nread, sent;
     char *ptr;
     char local_file[] = "./uuid_table";
@@ -582,6 +582,7 @@ err:
         libssh2_channel_free(channel);
         channel = NULL;
     }
+    VIR_FORCE_FCLOSE(fd);
     return -1;
 }
 
@@ -1006,7 +1007,7 @@ openSSHSession(virConnectPtr conn, virConnectAuthPtr auth,
             goto err;
         }
 
-        username = virRequestUsername(auth, NULL, conn->uri->server);
+        username = virAuthGetUsername(conn, auth, "ssh", NULL, conn->uri->server);
 
         if (username == NULL) {
             PHYP_ERROR(VIR_ERR_AUTH_FAILED, "%s",
@@ -1087,7 +1088,7 @@ keyboard_interactive:
             goto disconnect;
         }
 
-        password = virRequestPassword(auth, username, conn->uri->server);
+        password = virAuthGetPassword(conn, auth, "ssh", username, conn->uri->server);
 
         if (password == NULL) {
             PHYP_ERROR(VIR_ERR_AUTH_FAILED, "%s",
@@ -2039,6 +2040,7 @@ phypStorageVolCreateXML(virStoragePoolPtr pool,
     virStorageVolDefPtr voldef = NULL;
     virStoragePoolDefPtr spdef = NULL;
     virStorageVolPtr vol = NULL;
+    virStorageVolPtr dup_vol = NULL;
     char *key = NULL;
 
     if (VIR_ALLOC(spdef) < 0) {
@@ -2085,8 +2087,9 @@ phypStorageVolCreateXML(virStoragePoolPtr pool,
     }
 
     /* checking if this name already exists on this system */
-    if (phypVolumeLookupByName(pool, voldef->name) != NULL) {
+    if ((dup_vol = phypVolumeLookupByName(pool, voldef->name)) != NULL) {
         VIR_ERROR(_("StoragePool name already exists."));
+        virUnrefStorageVol(dup_vol);
         goto err;
     }
 
@@ -2260,7 +2263,7 @@ phypVolumeGetXMLDesc(virStorageVolPtr vol, unsigned int flags)
     virStorageVolDef voldef;
     virStoragePoolDef pool;
     virStoragePoolPtr sp;
-    char *xml;
+    char *xml = NULL;
 
     virCheckFlags(0, NULL);
 
@@ -2270,23 +2273,23 @@ phypVolumeGetXMLDesc(virStorageVolPtr vol, unsigned int flags)
     sp = phypStoragePoolLookupByName(vol->conn, vol->pool);
 
     if (!sp)
-        goto err;
+        goto cleanup;
 
     if (sp->name != NULL) {
         pool.name = sp->name;
     } else {
         VIR_ERROR(_("Unable to determine storage sp's name."));
-        goto err;
+        goto cleanup;
     }
 
     if (memcpy(pool.uuid, sp->uuid, VIR_UUID_BUFLEN) == NULL) {
         VIR_ERROR(_("Unable to determine storage sp's uuid."));
-        goto err;
+        goto cleanup;
     }
 
     if ((pool.capacity = phypGetStoragePoolSize(sp->conn, sp->name)) == -1) {
         VIR_ERROR(_("Unable to determine storage sps's size."));
-        goto err;
+        goto cleanup;
     }
 
     /* Information not avaliable */
@@ -2298,21 +2301,21 @@ phypVolumeGetXMLDesc(virStorageVolPtr vol, unsigned int flags)
     if ((pool.source.adapter =
          phypGetStoragePoolDevice(sp->conn, sp->name)) == NULL) {
         VIR_ERROR(_("Unable to determine storage sps's source adapter."));
-        goto err;
+        goto cleanup;
     }
 
     if (vol->name != NULL)
         voldef.name = vol->name;
     else {
         VIR_ERROR(_("Unable to determine storage pool's name."));
-        goto err;
+        goto cleanup;
     }
 
     voldef.key = strdup(vol->key);
 
     if (voldef.key == NULL) {
         virReportOOMError();
-        goto err;
+        goto cleanup;
     }
 
     voldef.type = VIR_STORAGE_POOL_LOGICAL;
@@ -2321,10 +2324,10 @@ phypVolumeGetXMLDesc(virStorageVolPtr vol, unsigned int flags)
 
     VIR_FREE(voldef.key);
 
+cleanup:
+    if (sp)
+        virUnrefStoragePool(sp);
     return xml;
-
-err:
-    return NULL;
 }
 
 /* The Volume Group path here will be treated as suggested in the
@@ -2710,20 +2713,23 @@ phypStoragePoolCreateXML(virConnectPtr conn,
     virCheckFlags(0, NULL);
 
     virStoragePoolDefPtr def = NULL;
+    virStoragePoolPtr dup_sp = NULL;
     virStoragePoolPtr sp = NULL;
 
     if (!(def = virStoragePoolDefParseString(xml)))
         goto err;
 
     /* checking if this name already exists on this system */
-    if (phypStoragePoolLookupByName(conn, def->name) != NULL) {
+    if ((dup_sp = phypStoragePoolLookupByName(conn, def->name)) != NULL) {
         VIR_WARN("StoragePool name already exists.");
+        virUnrefStoragePool(dup_sp);
         goto err;
     }
 
     /* checking if ID or UUID already exists on this system */
-    if (phypGetStoragePoolLookUpByUUID(conn, def->uuid) != NULL) {
+    if ((dup_sp = phypGetStoragePoolLookUpByUUID(conn, def->uuid)) != NULL) {
         VIR_WARN("StoragePool uuid already exists.");
+        virUnrefStoragePool(dup_sp);
         goto err;
     }
 
@@ -3608,10 +3614,10 @@ phypBuildLpar(virConnectPtr conn, virDomainDefPtr def)
     virBufferAddLit(&buf, "mksyscfg");
     if (system_type == HMC)
         virBufferAsprintf(&buf, " -m %s", managed_system);
-    virBufferAsprintf(&buf, " -r lpar -p %s -i min_mem=%d,desired_mem=%d,"
-                      "max_mem=%d,desired_procs=%d,virtual_scsi_adapters=%s",
-                      def->name, (int) def->mem.cur_balloon,
-                      (int) def->mem.cur_balloon, (int) def->mem.max_balloon,
+    virBufferAsprintf(&buf, " -r lpar -p %s -i min_mem=%lld,desired_mem=%lld,"
+                      "max_mem=%lld,desired_procs=%d,virtual_scsi_adapters=%s",
+                      def->name, def->mem.cur_balloon,
+                      def->mem.cur_balloon, def->mem.max_balloon,
                       (int) def->vcpus, def->disks[0]->src);
     ret = phypExecBuffer(session, &buf, &exit_status, conn, false);
 

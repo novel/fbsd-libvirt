@@ -370,6 +370,18 @@
   <define name="osexe">
     <element name="os">
       <element name="type">
+        <optional>
+          <attribute name="arch">
+            <choice>
+              <value>i686</value>
+              <value>x86_64</value>
+              <value>ppc</value>
+              <value>ppc64</value>
+              <value>mips</value>
+              <value>sparc</value>
+            </choice>
+          </attribute>
+        </optional>
         <value>exe</value>
       </element>
       <interleave>
@@ -378,6 +390,11 @@
             <ref name="absFilePath"/>
           </element>
         </optional>
+        <zeroOrMore>
+          <element name="initarg">
+            <text/>
+          </element>
+        </zeroOrMore>
       </interleave>
     </element>
   </define>
@@ -412,11 +429,11 @@
   <define name="resources">
     <interleave>
       <element name="memory">
-        <ref name="memoryKB"/>
+        <ref name='scaledInteger'/>
       </element>
       <optional>
         <element name="currentMemory">
-          <ref name="memoryKB"/>
+          <ref name='scaledInteger'/>
         </element>
       </optional>
       <optional>
@@ -461,25 +478,25 @@
           <!-- Maximum memory the VM can use -->
           <optional>
             <element name="hard_limit">
-              <ref name="memoryKB"/>
+              <ref name='scaledInteger'/>
             </element>
           </optional>
           <!-- Minimum memory ascertained for the VM during contention -->
           <optional>
             <element name="soft_limit">
-              <ref name="memoryKB"/>
+              <ref name='scaledInteger'/>
             </element>
           </optional>
           <!-- Minimum amount of memory required to start the VM -->
           <optional>
             <element name="min_guarantee">
-              <ref name="memoryKB"/>
+              <ref name='scaledInteger'/>
             </element>
           </optional>
           <!-- Maximum swap area the VM can use -->
           <optional>
             <element name="swap_hard_limit">
-              <ref name="memoryKB"/>
+              <ref name='scaledInteger'/>
             </element>
           </optional>
         </element>
@@ -487,6 +504,14 @@
 
       <optional>
         <element name="vcpu">
+          <optional>
+            <attribute name="placement">
+              <choice>
+                <value>static</value>
+                <value>auto</value>
+              </choice>
+            </attribute>
+          </optional>
           <optional>
             <attribute name="cpuset">
               <ref name="cpuset"/>
@@ -537,16 +562,32 @@
         <element name="numatune">
           <optional>
             <element name="memory">
-              <attribute name="mode">
-                <choice>
-                  <value>strict</value>
-                  <value>preferred</value>
-                  <value>interleave</value>
-                </choice>
-              </attribute>
-              <attribute name="nodeset">
-                <ref name="cpuset"/>
-              </attribute>
+              <optional>
+                <attribute name="mode">
+                  <choice>
+                    <value>strict</value>
+                    <value>preferred</value>
+                    <value>interleave</value>
+                  </choice>
+                </attribute>
+              </optional>
+              <choice>
+                <group>
+                  <optional>
+                    <attribute name='placement'>
+                      <value>static</value>
+                    </attribute>
+                  </optional>
+                  <optional>
+                    <attribute name='nodeset'>
+                      <ref name='cpuset'/>
+                    </attribute>
+                  </optional>
+                </group>
+                <attribute name='placement'>
+                  <value>auto</value>
+                </attribute>
+              </choice>
             </element>
           </optional>
         </element>
@@ -557,12 +598,22 @@
     <optional>
       <element name="clock">
         <choice>
-          <attribute name="offset">
-            <value>localtime</value>
-          </attribute>
-          <attribute name="offset">
-            <value>utc</value>
-          </attribute>
+          <group>
+            <attribute name="offset">
+              <choice>
+                <value>localtime</value>
+                <value>utc</value>
+              </choice>
+            </attribute>
+            <optional>
+              <attribute name='adjustment'>
+                <choice>
+                  <ref name='timeDelta'/>
+                  <value>reset</value>
+                </choice>
+              </attribute>
+            </optional>
+          </group>
           <group>
             <attribute name="offset">
               <value>timezone</value>
@@ -580,6 +631,14 @@
             <optional>
               <attribute name="adjustment">
                 <ref name="timeDelta"/>
+              </attribute>
+            </optional>
+            <optional>
+              <attribute name="basis">
+                <choice>
+                  <value>utc</value>
+                  <value>localtime</value>
+                </choice>
               </attribute>
             </optional>
           </group>
@@ -727,6 +786,9 @@
     <interleave>
       <optional>
         <ref name="driver"/>
+      </optional>
+      <optional>
+        <ref name='diskMirror'/>
       </optional>
       <optional>
         <ref name="diskAuth"/>
@@ -959,12 +1021,18 @@
           </choice>
         </attribute>
       </optional>
+      <optional>
+        <attribute name="tray">
+          <choice>
+            <value>open</value>
+            <value>closed</value>
+          </choice>
+        </attribute>
+      </optional>
     </element>
   </define>
   <!--
-      Disk may use a special driver for access. Currently this is
-      only defined for Xen for tap/aio and file, but will certainly be
-      extended in the future, and libvirt doesn't look for specific values.
+      Disk may use a special driver for access.
     -->
   <define name="driver">
     <element name="driver">
@@ -1159,7 +1227,6 @@
               </attribute>
               <empty/>
             </element>
-            <ref name="filesystemtgt"/>
           </interleave>
         </group>
         <group>
@@ -1173,7 +1240,6 @@
               </attribute>
               <empty/>
             </element>
-            <ref name="filesystemtgt"/>
           </interleave>
         </group>
         <group>
@@ -1206,7 +1272,6 @@
                 <empty/>
               </element>
             </optional>
-            <ref name="filesystemtgt"/>
           </interleave>
         </group>
         <group>
@@ -1220,41 +1285,38 @@
               </attribute>
               <empty/>
             </element>
-            <ref name="filesystemtgt"/>
           </interleave>
         </group>
       </choice>
-      <optional>
-        <attribute name="accessmode">
-        <choice>
-          <value>passthrough</value>
-          <value>mapped</value>
-          <value>squash</value>
-        </choice>
-        </attribute>
-      </optional>
-      <optional>
-        <element name='readonly'>
+      <interleave>
+        <element name="target">
+          <attribute name="dir">
+            <ref name="absDirPath"/>
+          </attribute>
           <empty/>
         </element>
-      </optional>
+        <optional>
+          <attribute name="accessmode">
+            <choice>
+              <value>passthrough</value>
+              <value>mapped</value>
+              <value>squash</value>
+            </choice>
+          </attribute>
+        </optional>
+        <optional>
+          <element name='readonly'>
+            <empty/>
+          </element>
+        </optional>
+        <optional>
+          <ref name="alias"/>
+        </optional>
+        <optional>
+          <ref name="address"/>
+        </optional>
+      </interleave>
     </element>
-  </define>
-  <define name="filesystemtgt">
-    <interleave>
-      <optional>
-        <ref name="alias"/>
-      </optional>
-      <optional>
-        <ref name="address"/>
-      </optional>
-      <element name="target">
-        <attribute name="dir">
-          <ref name="absDirPath"/>
-        </attribute>
-        <empty/>
-      </element>
-    </interleave>
   </define>
   <!--
       An interface description can either be of type bridge in which case
@@ -1383,7 +1445,7 @@
             <optional>
               <element name="mac">
                 <attribute name="address">
-                  <ref name="macAddr"/>
+                  <ref name="uniMacAddr"/>
                 </attribute>
                 <empty/>
               </element>
@@ -1409,11 +1471,61 @@
             <optional>
               <element name="mac">
                 <attribute name="address">
-                  <ref name="macAddr"/>
+                  <ref name="uniMacAddr"/>
                 </attribute>
                 <empty/>
               </element>
             </optional>
+          </interleave>
+        </group>
+        <group>
+          <attribute name="type">
+            <value>hostdev</value>
+          </attribute>
+          <optional>
+            <attribute name="managed">
+              <choice>
+                <value>yes</value>
+                <value>no</value>
+              </choice>
+            </attribute>
+          </optional>
+          <interleave>
+            <element name="source">
+              <choice>
+                <group>
+                  <ref name="usbproduct"/>
+                  <optional>
+                    <ref name="usbaddress"/>
+                  </optional>
+                </group>
+                <element name="address">
+                  <choice>
+                    <group>
+                      <attribute name="type">
+                        <value>pci</value>
+                      </attribute>
+                      <ref name="pciaddress"/>
+                    </group>
+                    <group>
+                      <attribute name="type">
+                        <value>usb</value>
+                      </attribute>
+                      <attribute name="bus">
+                        <ref name="usbAddr"/>
+                      </attribute>
+                      <attribute name="device">
+                        <ref name="usbPort"/>
+                      </attribute>
+                    </group>
+                  </choice>
+                </element>
+              </choice>
+            </element>
+            <optional>
+              <ref name="virtualPortProfile"/>
+            </optional>
+            <ref name="interface-options"/>
           </interleave>
         </group>
       </choice>
@@ -1440,7 +1552,7 @@
       <optional>
         <element name="mac">
           <attribute name="address">
-            <ref name="macAddr"/>
+            <ref name="uniMacAddr"/>
           </attribute>
           <empty/>
         </element>
@@ -1678,6 +1790,15 @@
               </choice>
             </attribute>
           </optional>
+          <optional>
+            <attribute name="defaultMode">
+              <choice>
+                <value>any</value>
+                <value>secure</value>
+                <value>insecure</value>
+              </choice>
+            </attribute>
+          </optional>
           <interleave>
             <ref name="listenElements"/>
             <zeroOrMore>
@@ -1691,6 +1812,7 @@
                     <value>playback</value>
                     <value>record</value>
                     <value>smartcard</value>
+                    <value>usbredir</value>
                   </choice>
                 </attribute>
                 <attribute name="mode">
@@ -1771,6 +1893,17 @@
                   <choice>
                     <value>yes</value>
                     <value>no</value>
+                  </choice>
+                </attribute>
+                <empty/>
+              </element>
+            </optional>
+            <optional>
+              <element name="mouse">
+                <attribute name="mode">
+                  <choice>
+                    <value>server</value>
+                    <value>client</value>
                   </choice>
                 </attribute>
                 <empty/>
@@ -2021,6 +2154,8 @@
         <value>serial</value>
         <value>uml</value>
         <value>virtio</value>
+        <value>lxc</value>
+        <value>openvz</value>
       </choice>
     </attribute>
   </define>
@@ -2460,6 +2595,11 @@
       </attribute>
     </optional>
     <optional>
+      <attribute name="target">
+        <ref name="driveTarget"/>
+      </attribute>
+    </optional>
+    <optional>
       <attribute name="unit">
         <ref name="driveUnit"/>
       </attribute>
@@ -2555,6 +2695,11 @@
           </optional>
           <optional>
             <element name="viridian">
+              <empty/>
+            </element>
+          </optional>
+          <optional>
+            <element name="privnet">
               <empty/>
             </element>
           </optional>
@@ -2900,6 +3045,23 @@
       <empty/>
     </element>
   </define>
+  <define name='diskMirror'>
+    <element name='mirror'>
+      <attribute name='file'>
+        <ref name='absFilePath'/>
+      </attribute>
+      <optional>
+        <attribute name='format'>
+          <ref name="genericName"/>
+        </attribute>
+      </optional>
+      <optional>
+        <attribute name='ready'>
+          <value>yes</value>
+        </attribute>
+      </optional>
+    </element>
+  </define>
   <define name="diskAuth">
     <element name="auth">
       <attribute name="username">
@@ -3022,10 +3184,6 @@
 
   <!--
        Type library
-
-       A domain name should be made of ascii, numbers, _-+ and is non-empty
-       memoryKB request at least 4Mbytes though Xen will grow bigger if too low
-       weight currently is in range [100, 1000]
     -->
   <define name="cpuset">
     <data type="string">
@@ -3067,6 +3225,7 @@
       <param name="minInclusive">-1</param>
     </data>
   </define>
+  <!-- weight currently is in range [100, 1000] -->
   <define name="weight">
     <data type="unsignedInt">
       <param name="pattern">[0-9]+</param>
@@ -3074,10 +3233,10 @@
       <param name="maxInclusive">1000</param>
     </data>
   </define>
+  <!-- Memory as an attribute is in KiB, no way to express a unit -->
   <define name="memoryKB">
     <data type="unsignedInt">
       <param name="pattern">[0-9]+</param>
-      <param name="minInclusive">4000</param>
     </data>
   </define>
   <define name="domainName">
@@ -3143,6 +3302,11 @@
     </data>
   </define>
   <define name="driveBus">
+    <data type="string">
+      <param name="pattern">[0-9]{1,2}</param>
+    </data>
+  </define>
+  <define name="driveTarget">
     <data type="string">
       <param name="pattern">[0-9]{1,2}</param>
     </data>

@@ -29,14 +29,16 @@
 
 int qemuUpdateActivePciHostdevs(struct qemud_driver *driver,
                                 virDomainDefPtr def);
+int qemuUpdateActiveUsbHostdevs(struct qemud_driver *driver,
+                                virDomainDefPtr def);
 int qemuPrepareHostdevPCIDevices(struct qemud_driver *driver,
                                  const char *name,
+                                 const unsigned char *uuid,
                                  virDomainHostdevDefPtr *hostdevs,
                                  int nhostdevs);
 int qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
                                  const char *name,
-                                 virDomainHostdevDefPtr *hostdevs,
-                                 int nhostdevs);
+                                 usbDeviceList *list);
 int qemuPrepareHostDevices(struct qemud_driver *driver,
                            virDomainDefPtr def);
 void qemuReattachPciDevice(pciDevice *dev, struct qemud_driver *driver);
@@ -46,6 +48,11 @@ void qemuDomainReAttachHostdevDevices(struct qemud_driver *driver,
                                       int nhostdevs);
 void qemuDomainReAttachHostDevices(struct qemud_driver *driver,
                                    virDomainDefPtr def);
-
+int qemuDomainHostdevIsVirtualFunction(virDomainHostdevDefPtr hostdev);
+int qemuDomainHostdevNetConfigReplace(virDomainHostdevDefPtr hostdev,
+                                      const unsigned char *uuid,
+                                      char *stateDir);
+int qemuDomainHostdevNetConfigRestore(virDomainHostdevDefPtr hostdev,
+                                      char *stateDir);
 
 #endif /* __QEMU_HOSTDEV_H__ */

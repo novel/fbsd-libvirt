@@ -1,7 +1,7 @@
 /*
  * qemu_domain.h: QEMU domain private state
  *
- * Copyright (C) 2006-2011 Red Hat, Inc.
+ * Copyright (C) 2006-2012 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -47,7 +47,10 @@
 
 #define QEMU_NAMESPACE_HREF "http://libvirt.org/schemas/domain/qemu/1.0"
 
-VIR_ENUM_DECL(qemuDomainJob)
+#define QEMU_DOMAIN_FORMAT_LIVE_FLAGS       \
+    (VIR_DOMAIN_XML_SECURE |                \
+     VIR_DOMAIN_XML_UPDATE_CPU)
+
 VIR_ENUM_IMPL(qemuDomainJob, QEMU_JOB_LAST,
               "none",
               "query",
@@ -60,7 +63,6 @@ VIR_ENUM_IMPL(qemuDomainJob, QEMU_JOB_LAST,
               "async nested",
 );
 
-VIR_ENUM_DECL(qemuDomainAsyncJob)
 VIR_ENUM_IMPL(qemuDomainAsyncJob, QEMU_ASYNC_JOB_LAST,
               "none",
               "migration out",
@@ -145,6 +147,7 @@ qemuDomainObjResetJob(qemuDomainObjPrivatePtr priv)
     struct qemuDomainJobObj *job = &priv->job;
 
     job->active = QEMU_JOB_NONE;
+    job->owner = 0;
 }
 
 static void
@@ -153,6 +156,7 @@ qemuDomainObjResetAsyncJob(qemuDomainObjPrivatePtr priv)
     struct qemuDomainJobObj *job = &priv->job;
 
     job->asyncJob = QEMU_ASYNC_JOB_NONE;
+    job->asyncOwner = 0;
     job->phase = 0;
     job->mask = DEFAULT_JOB_MASK;
     job->start = 0;
@@ -167,11 +171,23 @@ qemuDomainObjRestoreJob(virDomainObjPtr obj,
 
     memset(job, 0, sizeof(*job));
     job->active = priv->job.active;
+    job->owner = priv->job.owner;
     job->asyncJob = priv->job.asyncJob;
+    job->asyncOwner = priv->job.asyncOwner;
     job->phase = priv->job.phase;
 
     qemuDomainObjResetJob(priv);
     qemuDomainObjResetAsyncJob(priv);
+}
+
+void
+qemuDomainObjTransferJob(virDomainObjPtr obj)
+{
+    qemuDomainObjPrivatePtr priv = obj->privateData;
+
+    VIR_DEBUG("Changing job owner from %d to %d",
+              priv->job.owner, virThreadSelfID());
+    priv->job.owner = virThreadSelfID();
 }
 
 static void
@@ -179,6 +195,12 @@ qemuDomainObjFreeJob(qemuDomainObjPrivatePtr priv)
 {
     ignore_value(virCondDestroy(&priv->job.cond));
     ignore_value(virCondDestroy(&priv->job.asyncCond));
+}
+
+static bool
+qemuDomainTrackJob(enum qemuDomainJob job)
+{
+    return (QEMU_DOMAIN_TRACK_JOBS & JOB_MASK(job)) != 0;
 }
 
 
@@ -190,6 +212,9 @@ static void *qemuDomainObjPrivateAlloc(void)
         return NULL;
 
     if (qemuDomainObjInitJob(priv) < 0)
+        goto error;
+
+    if (!(priv->cons = virConsoleAlloc()))
         goto error;
 
     priv->migMaxBandwidth = QEMU_DOMAIN_DEFAULT_MIG_BANDWIDTH_MAX;
@@ -214,6 +239,8 @@ static void qemuDomainObjPrivateFree(void *data)
     VIR_FREE(priv->lockState);
     VIR_FREE(priv->origname);
 
+    virConsoleFree(priv->cons);
+
     /* This should never be non-NULL if we get here, but just in case... */
     if (priv->mon) {
         VIR_ERROR(_("Unexpected QEMU monitor still active during domain deletion"));
@@ -223,6 +250,7 @@ static void qemuDomainObjPrivateFree(void *data)
         VIR_ERROR(_("Unexpected QEMU agent still active during domain deletion"));
         qemuAgentClose(priv->agent);
     }
+    VIR_FREE(priv->cleanupCallbacks);
     VIR_FREE(priv);
 }
 
@@ -231,6 +259,7 @@ static int qemuDomainObjPrivateXMLFormat(virBufferPtr buf, void *data)
 {
     qemuDomainObjPrivatePtr priv = data;
     const char *monitorpath;
+    enum qemuDomainJob job;
 
     /* priv->monitor_chr is set only for qemu */
     if (priv->monConfig) {
@@ -276,6 +305,10 @@ static int qemuDomainObjPrivateXMLFormat(virBufferPtr buf, void *data)
     if (priv->lockState)
         virBufferAsprintf(buf, "  <lockstate>%s</lockstate>\n", priv->lockState);
 
+    job = priv->job.active;
+    if (!qemuDomainTrackJob(job))
+        priv->job.active = QEMU_JOB_NONE;
+
     if (priv->job.active || priv->job.asyncJob) {
         virBufferAsprintf(buf, "  <job type='%s' async='%s'",
                           qemuDomainJobTypeToString(priv->job.active),
@@ -287,6 +320,7 @@ static int qemuDomainObjPrivateXMLFormat(virBufferPtr buf, void *data)
         }
         virBufferAddLit(buf, "/>\n");
     }
+    priv->job.active = job;
 
     if (priv->fakeReboot)
         virBufferAsprintf(buf, "  <fakereboot/>\n");
@@ -644,11 +678,23 @@ qemuDomainObjSetJobPhase(struct qemud_driver *driver,
                          int phase)
 {
     qemuDomainObjPrivatePtr priv = obj->privateData;
+    int me = virThreadSelfID();
 
     if (!priv->job.asyncJob)
         return;
 
+    VIR_DEBUG("Setting '%s' phase to '%s'",
+              qemuDomainAsyncJobTypeToString(priv->job.asyncJob),
+              qemuDomainAsyncJobPhaseToString(priv->job.asyncJob, phase));
+
+    if (priv->job.asyncOwner && me != priv->job.asyncOwner) {
+        VIR_WARN("'%s' async job is owned by thread %d",
+                 qemuDomainAsyncJobTypeToString(priv->job.asyncJob),
+                 priv->job.asyncOwner);
+    }
+
     priv->job.phase = phase;
+    priv->job.asyncOwner = me;
     qemuDomainObjSaveJob(driver, obj);
 }
 
@@ -673,6 +719,22 @@ qemuDomainObjDiscardAsyncJob(struct qemud_driver *driver, virDomainObjPtr obj)
         qemuDomainObjResetJob(priv);
     qemuDomainObjResetAsyncJob(priv);
     qemuDomainObjSaveJob(driver, obj);
+}
+
+void
+qemuDomainObjReleaseAsyncJob(virDomainObjPtr obj)
+{
+    qemuDomainObjPrivatePtr priv = obj->privateData;
+
+    VIR_DEBUG("Releasing ownership of '%s' async job",
+              qemuDomainAsyncJobTypeToString(priv->job.asyncJob));
+
+    if (priv->job.asyncOwner != virThreadSelfID()) {
+        VIR_WARN("'%s' async job is owned by thread %d",
+                 qemuDomainAsyncJobTypeToString(priv->job.asyncJob),
+                 priv->job.asyncOwner);
+    }
+    priv->job.asyncOwner = 0;
 }
 
 static bool
@@ -744,11 +806,13 @@ retry:
                    qemuDomainJobTypeToString(job),
                    qemuDomainAsyncJobTypeToString(priv->job.asyncJob));
         priv->job.active = job;
+        priv->job.owner = virThreadSelfID();
     } else {
         VIR_DEBUG("Starting async job: %s",
                   qemuDomainAsyncJobTypeToString(asyncJob));
         qemuDomainObjResetAsyncJob(priv);
         priv->job.asyncJob = asyncJob;
+        priv->job.asyncOwner = virThreadSelfID();
         priv->job.start = now;
     }
 
@@ -758,11 +822,21 @@ retry:
         virDomainObjLock(obj);
     }
 
-    qemuDomainObjSaveJob(driver, obj);
+    if (qemuDomainTrackJob(job))
+        qemuDomainObjSaveJob(driver, obj);
 
     return 0;
 
 error:
+    VIR_WARN("Cannot start job (%s, %s) for domain %s;"
+             " current job is (%s, %s) owned by (%d, %d)",
+             qemuDomainJobTypeToString(job),
+             qemuDomainAsyncJobTypeToString(asyncJob),
+             obj->def->name,
+             qemuDomainJobTypeToString(priv->job.active),
+             qemuDomainAsyncJobTypeToString(priv->job.asyncJob),
+             priv->job.owner, priv->job.asyncOwner);
+
     if (errno == ETIMEDOUT)
         qemuReportError(VIR_ERR_OPERATION_TIMEOUT,
                         "%s", _("cannot acquire state change lock"));
@@ -854,15 +928,17 @@ int qemuDomainObjBeginAsyncJobWithDriver(struct qemud_driver *driver,
 int qemuDomainObjEndJob(struct qemud_driver *driver, virDomainObjPtr obj)
 {
     qemuDomainObjPrivatePtr priv = obj->privateData;
+    enum qemuDomainJob job = priv->job.active;
 
     priv->jobs_queued--;
 
     VIR_DEBUG("Stopping job: %s (async=%s)",
-              qemuDomainJobTypeToString(priv->job.active),
+              qemuDomainJobTypeToString(job),
               qemuDomainAsyncJobTypeToString(priv->job.asyncJob));
 
     qemuDomainObjResetJob(priv);
-    qemuDomainObjSaveJob(driver, obj);
+    if (qemuDomainTrackJob(job))
+        qemuDomainObjSaveJob(driver, obj);
     virCondSignal(&priv->job.cond);
 
     return virDomainObjUnref(obj);
@@ -899,6 +975,9 @@ qemuDomainObjEnterMonitorInternal(struct qemud_driver *driver,
                             _("unexpected async job %d"), asyncJob);
             return -1;
         }
+        if (priv->job.asyncOwner != virThreadSelfID())
+            VIR_WARN("This thread doesn't seem to be the async job owner: %d",
+                     priv->job.asyncOwner);
         if (qemuDomainObjBeginJobInternal(driver, driver_locked, obj,
                                           QEMU_JOB_ASYNC_NESTED,
                                           QEMU_ASYNC_JOB_NONE) < 0)
@@ -910,6 +989,9 @@ qemuDomainObjEnterMonitorInternal(struct qemud_driver *driver,
             ignore_value(qemuDomainObjEndJob(driver, obj));
             return -1;
         }
+    } else if (priv->job.asyncOwner == virThreadSelfID()) {
+        VIR_WARN("This thread seems to be the async job owner; entering"
+                 " monitor without asking for a nested job is dangerous");
     }
 
     qemuMonitorLock(priv->mon);
@@ -1141,13 +1223,18 @@ void qemuDomainObjExitRemoteWithDriver(struct qemud_driver *driver,
 }
 
 
-char *qemuDomainDefFormatXML(struct qemud_driver *driver,
-                             virDomainDefPtr def,
-                             unsigned int flags)
+int
+qemuDomainDefFormatBuf(struct qemud_driver *driver,
+                       virDomainDefPtr def,
+                       unsigned int flags,
+                       bool compatible,
+                       virBuffer *buf)
 {
-    char *ret = NULL;
+    int ret = -1;
     virCPUDefPtr cpu = NULL;
     virCPUDefPtr def_cpu = def->cpu;
+    virDomainControllerDefPtr *controllers = NULL;
+    int ncontrollers = 0;
 
     /* Update guest CPU requirements according to host CPU */
     if ((flags & VIR_DOMAIN_XML_UPDATE_CPU) &&
@@ -1165,17 +1252,81 @@ char *qemuDomainDefFormatXML(struct qemud_driver *driver,
         def->cpu = cpu;
     }
 
-    ret = virDomainDefFormat(def, flags);
+    if (compatible) {
+        int i;
+        virDomainControllerDefPtr usb = NULL;
+
+        /* If only the default USB controller is present, we can remove it
+         * and make the XML compatible with older versions of libvirt which
+         * didn't support USB controllers in the XML but always added the
+         * default one to qemu anyway.
+         */
+        for (i = 0; i < def->ncontrollers; i++) {
+            if (def->controllers[i]->type == VIR_DOMAIN_CONTROLLER_TYPE_USB) {
+                if (usb) {
+                    usb = NULL;
+                    break;
+                }
+                usb = def->controllers[i];
+            }
+        }
+        if (usb && usb->idx == 0 && usb->model == -1) {
+            VIR_DEBUG("Removing default USB controller from domain '%s'"
+                      " for migration compatibility", def->name);
+            controllers = def->controllers;
+            ncontrollers = def->ncontrollers;
+            if (VIR_ALLOC_N(def->controllers, ncontrollers - 1) < 0) {
+                controllers = NULL;
+                virReportOOMError();
+                goto cleanup;
+            }
+
+            def->ncontrollers = 0;
+            for (i = 0; i < ncontrollers; i++) {
+                if (controllers[i] != usb)
+                    def->controllers[def->ncontrollers++] = controllers[i];
+            }
+        }
+    }
+
+    ret = virDomainDefFormatInternal(def, flags, buf);
 
 cleanup:
     def->cpu = def_cpu;
     virCPUDefFree(cpu);
+    if (controllers) {
+        VIR_FREE(def->controllers);
+        def->controllers = controllers;
+        def->ncontrollers = ncontrollers;
+    }
     return ret;
+}
+
+char *qemuDomainDefFormatXML(struct qemud_driver *driver,
+                             virDomainDefPtr def,
+                             unsigned int flags,
+                             bool compatible)
+{
+    virBuffer buf = VIR_BUFFER_INITIALIZER;
+
+    if (qemuDomainDefFormatBuf(driver, def, flags, compatible, &buf) < 0) {
+        virBufferFreeAndReset(&buf);
+        return NULL;
+    }
+
+    if (virBufferError(&buf)) {
+        virReportOOMError();
+        virBufferFreeAndReset(&buf);
+        return NULL;
+    }
+
+    return virBufferContentAndReset(&buf);
 }
 
 char *qemuDomainFormatXML(struct qemud_driver *driver,
                           virDomainObjPtr vm,
-                          unsigned int flags)
+                          unsigned int flags,
+                          bool compatible)
 {
     virDomainDefPtr def;
 
@@ -1184,7 +1335,21 @@ char *qemuDomainFormatXML(struct qemud_driver *driver,
     else
         def = vm->def;
 
-    return qemuDomainDefFormatXML(driver, def, flags);
+    return qemuDomainDefFormatXML(driver, def, flags, compatible);
+}
+
+char *
+qemuDomainDefFormatLive(struct qemud_driver *driver,
+                        virDomainDefPtr def,
+                        bool inactive,
+                        bool compatible)
+{
+    unsigned int flags = QEMU_DOMAIN_FORMAT_LIVE_FLAGS;
+
+    if (inactive)
+        flags |= VIR_DOMAIN_XML_INACTIVE;
+
+    return qemuDomainDefFormatXML(driver, def, flags, compatible);
 }
 
 
@@ -1431,11 +1596,9 @@ qemuDomainSnapshotWriteMetadata(virDomainObjPtr vm,
 
     virUUIDFormat(vm->def->uuid, uuidstr);
     newxml = virDomainSnapshotDefFormat(uuidstr, snapshot->def,
-                                        VIR_DOMAIN_XML_SECURE, 1);
-    if (newxml == NULL) {
-        virReportOOMError();
+                                        QEMU_DOMAIN_FORMAT_LIVE_FLAGS, 1);
+    if (newxml == NULL)
         return -1;
-    }
 
     if (virAsprintf(&snapDir, "%s/%s", snapshotDir, vm->def->name) < 0) {
         virReportOOMError();
@@ -1469,24 +1632,17 @@ cleanup:
 
 /* The domain is expected to be locked and inactive. Return -1 on normal
  * failure, 1 if we skipped a disk due to try_all.  */
-int
-qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
-                               virDomainObjPtr vm,
-                               virDomainSnapshotObjPtr snap,
-                               const char *op,
-                               bool try_all)
+static int
+qemuDomainSnapshotForEachQcow2Raw(struct qemud_driver *driver,
+                                  virDomainDefPtr def,
+                                  const char *name,
+                                  const char *op,
+                                  bool try_all,
+                                  int ndisks)
 {
     const char *qemuimgarg[] = { NULL, "snapshot", NULL, NULL, NULL, NULL };
     int i;
     bool skipped = false;
-    virDomainDefPtr def;
-
-    /* Prefer action on the disks in use at the time the snapshot was
-     * created; but fall back to current definition if dealing with a
-     * snapshot created prior to libvirt 0.9.5.  */
-    def = snap->def->dom;
-    if (!def)
-        def = vm->def;
 
     qemuimgarg[0] = qemuFindQemuImgBinary(driver);
     if (qemuimgarg[0] == NULL) {
@@ -1495,13 +1651,10 @@ qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
     }
 
     qemuimgarg[2] = op;
-    qemuimgarg[3] = snap->def->name;
+    qemuimgarg[3] = name;
 
-    for (i = 0; i < def->ndisks; i++) {
+    for (i = 0; i < ndisks; i++) {
         /* FIXME: we also need to handle LVM here */
-        /* FIXME: if we fail halfway through this loop, we are in an
-         * inconsistent state.  I'm not quite sure what to do about that
-         */
         if (def->disks[i]->device == VIR_DOMAIN_DISK_DEVICE_DISK) {
             if (!def->disks[i]->driverType ||
                 STRNEQ(def->disks[i]->driverType, "qcow2")) {
@@ -1513,6 +1666,11 @@ qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
                              def->disks[i]->dst);
                     skipped = true;
                     continue;
+                } else if (STREQ(op, "-c") && i) {
+                    /* We must roll back partial creation by deleting
+                     * all earlier snapshots.  */
+                    qemuDomainSnapshotForEachQcow2Raw(driver, def, name,
+                                                      "-d", false, i);
                 }
                 qemuReportError(VIR_ERR_OPERATION_INVALID,
                                 _("Disk device '%s' does not support"
@@ -1529,6 +1687,11 @@ qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
                              def->disks[i]->dst);
                     skipped = true;
                     continue;
+                } else if (STREQ(op, "-c") && i) {
+                    /* We must roll back partial creation by deleting
+                     * all earlier snapshots.  */
+                    qemuDomainSnapshotForEachQcow2Raw(driver, def, name,
+                                                      "-d", false, i);
                 }
                 return -1;
             }
@@ -1536,6 +1699,26 @@ qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
     }
 
     return skipped ? 1 : 0;
+}
+
+/* The domain is expected to be locked and inactive. Return -1 on normal
+ * failure, 1 if we skipped a disk due to try_all.  */
+int
+qemuDomainSnapshotForEachQcow2(struct qemud_driver *driver,
+                               virDomainObjPtr vm,
+                               virDomainSnapshotObjPtr snap,
+                               const char *op,
+                               bool try_all)
+{
+    /* Prefer action on the disks in use at the time the snapshot was
+     * created; but fall back to current definition if dealing with a
+     * snapshot created prior to libvirt 0.9.5.  */
+    virDomainDefPtr def = snap->def->dom;
+
+    if (!def)
+        def = vm->def;
+    return qemuDomainSnapshotForEachQcow2Raw(driver, def, snap->def->name,
+                                             op, try_all, def->ndisks);
 }
 
 /* Discard one snapshot (or its metadata), without reparenting any children.  */
@@ -1683,7 +1866,7 @@ qemuDomainSetFakeReboot(struct qemud_driver *driver,
 int
 qemuDomainCheckDiskPresence(struct qemud_driver *driver,
                             virDomainObjPtr vm,
-                            bool start_with_state)
+                            bool cold_boot)
 {
     int ret = -1;
     int i;
@@ -1718,7 +1901,7 @@ qemuDomainCheckDiskPresence(struct qemud_driver *driver,
                 break;
 
             case VIR_DOMAIN_STARTUP_POLICY_REQUISITE:
-                if (!start_with_state) {
+                if (cold_boot) {
                     virReportSystemError(errno,
                                          _("cannot access file '%s'"),
                                          disk->src);
@@ -1748,4 +1931,76 @@ qemuDomainCheckDiskPresence(struct qemud_driver *driver,
 
 cleanup:
     return ret;
+}
+
+/*
+ * The vm must be locked when any of the following cleanup functions is
+ * called.
+ */
+int
+qemuDomainCleanupAdd(virDomainObjPtr vm,
+                     qemuDomainCleanupCallback cb)
+{
+    qemuDomainObjPrivatePtr priv = vm->privateData;
+    int i;
+
+    VIR_DEBUG("vm=%s, cb=%p", vm->def->name, cb);
+
+    for (i = 0; i < priv->ncleanupCallbacks; i++) {
+        if (priv->cleanupCallbacks[i] == cb)
+            return 0;
+    }
+
+    if (VIR_RESIZE_N(priv->cleanupCallbacks,
+                     priv->ncleanupCallbacks_max,
+                     priv->ncleanupCallbacks, 1) < 0) {
+        virReportOOMError();
+        return -1;
+    }
+
+    priv->cleanupCallbacks[priv->ncleanupCallbacks++] = cb;
+    return 0;
+}
+
+void
+qemuDomainCleanupRemove(virDomainObjPtr vm,
+                        qemuDomainCleanupCallback cb)
+{
+    qemuDomainObjPrivatePtr priv = vm->privateData;
+    int i;
+
+    VIR_DEBUG("vm=%s, cb=%p", vm->def->name, cb);
+
+    for (i = 0; i < priv->ncleanupCallbacks; i++) {
+        if (priv->cleanupCallbacks[i] == cb) {
+            memmove(priv->cleanupCallbacks + i,
+                    priv->cleanupCallbacks + i + 1,
+                    priv->ncleanupCallbacks - i - 1);
+            priv->ncleanupCallbacks--;
+        }
+    }
+
+    VIR_SHRINK_N(priv->cleanupCallbacks,
+                 priv->ncleanupCallbacks_max,
+                 priv->ncleanupCallbacks_max - priv->ncleanupCallbacks);
+}
+
+void
+qemuDomainCleanupRun(struct qemud_driver *driver,
+                     virDomainObjPtr vm)
+{
+    qemuDomainObjPrivatePtr priv = vm->privateData;
+    int i;
+
+    VIR_DEBUG("driver=%p, vm=%s", driver, vm->def->name);
+
+    /* run cleanup callbacks in reverse order */
+    for (i = priv->ncleanupCallbacks - 1; i >= 0; i--) {
+        if (priv->cleanupCallbacks[i])
+            priv->cleanupCallbacks[i](driver, vm);
+    }
+
+    VIR_FREE(priv->cleanupCallbacks);
+    priv->ncleanupCallbacks = 0;
+    priv->ncleanupCallbacks_max = 0;
 }

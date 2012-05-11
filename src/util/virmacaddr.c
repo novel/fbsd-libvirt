@@ -58,7 +58,7 @@ virMacAddrCompare(const char *p, const char *q)
     /* On machines where 'char' and 'int' are types of the same size, the
        difference of two 'unsigned char' values - including the sign bit -
        doesn't fit in an 'int'.  */
-    return (c > d ? 1 : c < d ? -1 : 0);
+    return c > d ? 1 : c < d ? -1 : 0;
 }
 
 /**
@@ -86,7 +86,7 @@ virMacAddrParse(const char* str, unsigned char *addr)
         if (!c_isxdigit(*str))
             break;
 
-        result = strtoul(str, &end_ptr, 16);
+        result = strtoul(str, &end_ptr, 16); /* exempt from syntax-check */
 
         if ((end_ptr - str) < 1 || 2 < (end_ptr - str) ||
             (errno != 0) ||
@@ -125,4 +125,17 @@ void virMacAddrGenerate(const unsigned char *prefix,
     addr[3] = virRandomBits(8);
     addr[4] = virRandomBits(8);
     addr[5] = virRandomBits(8);
+}
+
+/* The low order bit of the first byte is the "multicast" bit. */
+bool
+virMacAddrIsMulticast(const unsigned char *addr)
+{
+    return !!(addr[0] & 1);
+}
+
+bool
+virMacAddrIsUnicast(const unsigned char *addr)
+{
+    return !(addr[0] & 1);
 }

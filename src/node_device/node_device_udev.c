@@ -1,7 +1,7 @@
 /*
  * node_device_udev.c: node device enumeration - libudev implementation
  *
- * Copyright (C) 2009-2011 Red Hat, Inc.
+ * Copyright (C) 2009-2012 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -1604,7 +1604,7 @@ out:
     return ret;
 }
 
-static int udevDeviceMonitorStartup(int privileged)
+static int udevDeviceMonitorStartup(int privileged ATTRIBUTE_UNUSED)
 {
     udevPrivate *priv = NULL;
     struct udev *udev = NULL;
@@ -1623,7 +1623,7 @@ static int udevDeviceMonitorStartup(int privileged)
         if (errno != ENOENT && (privileged  || errno != EACCES)) {
             char ebuf[256];
             VIR_ERROR(_("Failed to initialize libpciaccess: %s"),
-                      virStrerror(pciret, ebuf, sizeof ebuf));
+                      virStrerror(pciret, ebuf, sizeof(ebuf)));
             ret = -1;
             goto out;
         }

@@ -108,8 +108,6 @@ struct _virNetClient {
 };
 
 
-static void virNetClientRequestClose(virNetClientPtr client);
-
 static void virNetClientLock(virNetClientPtr client)
 {
     virMutexLock(&client->lock);
@@ -250,10 +248,18 @@ virNetClientKeepAliveStart(virNetClientPtr client,
     return ret;
 }
 
+void
+virNetClientKeepAliveStop(virNetClientPtr client)
+{
+    virNetClientLock(client);
+    virKeepAliveStopSending(client->keepalive);
+    virNetClientUnlock(client);
+}
+
 static void
 virNetClientKeepAliveDeadCB(void *opaque)
 {
-    virNetClientRequestClose(opaque);
+    virNetClientClose(opaque);
 }
 
 static int
@@ -512,18 +518,10 @@ virNetClientCloseLocked(virNetClientPtr client)
 
 void virNetClientClose(virNetClientPtr client)
 {
+    VIR_DEBUG("client=%p", client);
+
     if (!client)
         return;
-
-    virNetClientLock(client);
-    virNetClientCloseLocked(client);
-    virNetClientUnlock(client);
-}
-
-static void
-virNetClientRequestClose(virNetClientPtr client)
-{
-    VIR_DEBUG("client=%p", client);
 
     virNetClientLock(client);
 
@@ -1267,6 +1265,13 @@ static void virNetClientIOEventLoopPassTheBuck(virNetClientPtr client, virNetCli
     }
     client->haveTheBuck = false;
 
+    /* Remove non-blocking calls from the dispatch list since there is no
+     * call with a thread in the list which could take care of them.
+     */
+    virNetClientCallRemovePredicate(&client->waitDispatch,
+                                    virNetClientIOEventLoopRemoveNonBlocking,
+                                    thiscall);
+
     VIR_DEBUG("No thread to pass the buck to");
     if (client->wantClose) {
         virNetClientCloseLocked(client);
@@ -1310,12 +1315,9 @@ static int virNetClientIOEventLoop(virNetClientPtr client,
         if (virNetSocketHasCachedData(client->sock) || client->wantClose)
             timeout = 0;
 
-        /* If there are any non-blocking calls in the queue,
-         * then we don't want to sleep in poll()
+        /* If we are non-blocking, we don't want to sleep in poll()
          */
-        if (virNetClientCallMatchPredicate(client->waitDispatch,
-                                           virNetClientIOEventLoopWantNonBlock,
-                                           NULL))
+        if (thiscall->nonBlock)
             timeout = 0;
 
         fds[0].events = fds[0].revents = 0;
@@ -1420,13 +1422,6 @@ static int virNetClientIOEventLoop(virNetClientPtr client,
                                         virNetClientIOEventLoopRemoveDone,
                                         thiscall);
 
-        /* Iterate through waiting calls and if any are
-         * non-blocking, remove them from the dispatch list...
-         */
-        virNetClientCallRemovePredicate(&client->waitDispatch,
-                                        virNetClientIOEventLoopRemoveNonBlocking,
-                                        thiscall);
-
         /* Now see if *we* are done */
         if (thiscall->mode == VIR_NET_CLIENT_MODE_COMPLETE) {
             virNetClientCallRemove(&client->waitDispatch, thiscall);
@@ -1479,7 +1474,7 @@ static void virNetClientIOUpdateCallback(virNetClientPtr client,
  * which come from the user).  It does however free any intermediate
  * results, eg. the error structure if there is one.
  *
- * NB(2). Make sure to memset (&ret, 0, sizeof ret) before calling,
+ * NB(2). Make sure to memset (&ret, 0, sizeof(ret)) before calling,
  * else Bad Things will happen in the XDR code.
  *
  * NB(3) You must have the client lock before calling this

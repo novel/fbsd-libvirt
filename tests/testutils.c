@@ -72,7 +72,7 @@ virtTestCountAverage(double *items, int nitems)
     return (double) (sum / nitems);
 }
 
-ATTRIBUTE_FMT_PRINTF(3,4)
+
 void virtTestResult(const char *name, int ret, const char *msg, ...)
 {
     va_list vargs;
@@ -89,7 +89,11 @@ void virtTestResult(const char *name, int ret, const char *msg, ...)
         else {
             fprintf(stderr, "FAILED\n");
             if (msg) {
-                vfprintf(stderr, msg, vargs);
+                char *str;
+                if (virVasprintf(&str, msg, vargs) == 0) {
+                    fprintf(stderr, "%s", str);
+                    VIR_FREE(str);
+                }
             }
         }
     } else {
@@ -294,7 +298,7 @@ virtTestCaptureProgramOutput(const char *const argv[], char **buf, int maxlen)
     if (pipe(pipefd) < 0)
         return -1;
 
-    int pid = fork();
+    pid_t pid = fork();
     switch (pid) {
     case 0:
         VIR_FORCE_CLOSE(pipefd[0]);
@@ -573,6 +577,10 @@ int virtTestMain(int argc,
         progname += 2;
     if (argc > 1) {
         fprintf(stderr, "Usage: %s\n", argv[0]);
+        fputs("effective environment variables:\n"
+              "VIR_TEST_VERBOSE set to show names of individual tests\n"
+              "VIR_TEST_DEBUG set to show information for debugging failures\n",
+              stderr);
         return EXIT_FAILURE;
     }
     fprintf(stderr, "TEST: %s\n", progname);

@@ -83,8 +83,8 @@
 # define NSIG 32
 #endif
 
-verify(sizeof(gid_t) <= sizeof (unsigned int) &&
-       sizeof(uid_t) <= sizeof (unsigned int));
+verify(sizeof(gid_t) <= sizeof(unsigned int) &&
+       sizeof(uid_t) <= sizeof(unsigned int));
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 
@@ -605,7 +605,7 @@ int virFileIsLink(const char *linkpath)
     if (lstat(linkpath, &st) < 0)
         return -errno;
 
-    return (S_ISLNK(st.st_mode) != 0);
+    return S_ISLNK(st.st_mode) != 0;
 }
 
 
@@ -724,8 +724,17 @@ virFileAccessibleAs(const char *path, int mode,
                 return -1;
         }
 
-        errno = status;
-        return -1;
+        if (!WIFEXITED(status)) {
+            errno = EINTR;
+            return -1;
+        }
+
+        if (status) {
+            errno = WEXITSTATUS(status);
+            return -1;
+        }
+
+        return 0;
     }
 
     /* child.
@@ -1021,7 +1030,7 @@ virFileOpenAs(const char *path, int openflags, mode_t mode,
                 break;
             case -1:
                 /* failure detecting fstype */
-                virReportSystemError(errno, _("couldn't determine fs type of"
+                virReportSystemError(errno, _("couldn't determine fs type "
                                               "of mount containing '%s'"), path);
                 goto error;
             case 0:
@@ -1488,7 +1497,7 @@ virStrToLong_i(char const *s, char **end_ptr, int base, int *result)
     int err;
 
     errno = 0;
-    val = strtol(s, &p, base);
+    val = strtol(s, &p, base); /* exempt from syntax-check */
     err = (errno || (!end_ptr && *p) || p == s || (int) val != val);
     if (end_ptr)
         *end_ptr = p;
@@ -1507,7 +1516,7 @@ virStrToLong_ui(char const *s, char **end_ptr, int base, unsigned int *result)
     int err;
 
     errno = 0;
-    val = strtoul(s, &p, base);
+    val = strtoul(s, &p, base); /* exempt from syntax-check */
     err = (errno || (!end_ptr && *p) || p == s || (unsigned int) val != val);
     if (end_ptr)
         *end_ptr = p;
@@ -1526,7 +1535,7 @@ virStrToLong_l(char const *s, char **end_ptr, int base, long *result)
     int err;
 
     errno = 0;
-    val = strtol(s, &p, base);
+    val = strtol(s, &p, base); /* exempt from syntax-check */
     err = (errno || (!end_ptr && *p) || p == s);
     if (end_ptr)
         *end_ptr = p;
@@ -1545,7 +1554,7 @@ virStrToLong_ul(char const *s, char **end_ptr, int base, unsigned long *result)
     int err;
 
     errno = 0;
-    val = strtoul(s, &p, base);
+    val = strtoul(s, &p, base); /* exempt from syntax-check */
     err = (errno || (!end_ptr && *p) || p == s);
     if (end_ptr)
         *end_ptr = p;
@@ -1564,8 +1573,8 @@ virStrToLong_ll(char const *s, char **end_ptr, int base, long long *result)
     int err;
 
     errno = 0;
-    val = strtoll(s, &p, base);
-    err = (errno || (!end_ptr && *p) || p == s || (long long) val != val);
+    val = strtoll(s, &p, base); /* exempt from syntax-check */
+    err = (errno || (!end_ptr && *p) || p == s);
     if (end_ptr)
         *end_ptr = p;
     if (err)
@@ -1583,8 +1592,8 @@ virStrToLong_ull(char const *s, char **end_ptr, int base, unsigned long long *re
     int err;
 
     errno = 0;
-    val = strtoull(s, &p, base);
-    err = (errno || (!end_ptr && *p) || p == s || (unsigned long long) val != val);
+    val = strtoull(s, &p, base); /* exempt from syntax-check */
+    err = (errno || (!end_ptr && *p) || p == s);
     if (end_ptr)
         *end_ptr = p;
     if (err)
@@ -1603,7 +1612,7 @@ virStrToDouble(char const *s,
     int err;
 
     errno = 0;
-    val = strtod(s, &p);
+    val = strtod(s, &p); /* exempt from syntax-check */
     err = (errno || (!end_ptr && *p) || p == s);
     if (end_ptr)
         *end_ptr = p;
@@ -1626,6 +1635,76 @@ virHexToBin(unsigned char c)
     case 'e': case 'E': return 14;
     case 'f': case 'F': return 15;
     }
+}
+
+/* Scale an integer VALUE in-place by an optional case-insensitive
+ * SUFFIX, defaulting to SCALE if suffix is NULL or empty (scale is
+ * typically 1 or 1024).  Recognized suffixes include 'b' or 'bytes',
+ * as well as power-of-two scaling via binary abbreviations ('KiB',
+ * 'MiB', ...) or their one-letter counterpart ('k', 'M', ...), and
+ * power-of-ten scaling via SI abbreviations ('KB', 'MB', ...).
+ * Ensure that the result does not exceed LIMIT.  Return 0 on success,
+ * -1 with error message raised on failure.  */
+int
+virScaleInteger(unsigned long long *value, const char *suffix,
+                unsigned long long scale, unsigned long long limit)
+{
+    if (!suffix || !*suffix) {
+        if (!scale) {
+            virUtilError(VIR_ERR_INTERNAL_ERROR,
+                         _("invalid scale %llu"), scale);
+            return -1;
+        }
+        suffix = "";
+    } else if (STRCASEEQ(suffix, "b") || STRCASEEQ(suffix, "byte") ||
+               STRCASEEQ(suffix, "bytes")) {
+        scale = 1;
+    } else {
+        int base;
+
+        if (!suffix[1] || STRCASEEQ(suffix + 1, "iB")) {
+            base = 1024;
+        } else if (c_tolower(suffix[1]) == 'b' && !suffix[2]) {
+            base = 1000;
+        } else {
+            virUtilError(VIR_ERR_INVALID_ARG,
+                         _("unknown suffix '%s'"), suffix);
+            return -1;
+        }
+        scale = 1;
+        switch (c_tolower(*suffix)) {
+        case 'e':
+            scale *= base;
+            /* fallthrough */
+        case 'p':
+            scale *= base;
+            /* fallthrough */
+        case 't':
+            scale *= base;
+            /* fallthrough */
+        case 'g':
+            scale *= base;
+            /* fallthrough */
+        case 'm':
+            scale *= base;
+            /* fallthrough */
+        case 'k':
+            scale *= base;
+            break;
+        default:
+            virUtilError(VIR_ERR_INVALID_ARG,
+                         _("unknown suffix '%s'"), suffix);
+            return -1;
+        }
+    }
+
+    if (*value && *value >= (limit / scale)) {
+        virUtilError(VIR_ERR_OVERFLOW, _("value too large: %llu%s"),
+                     *value, suffix);
+        return -1;
+    }
+    *value *= scale;
+    return 0;
 }
 
 /**
@@ -1734,19 +1813,19 @@ virParseNumber(const char **str)
     const char *cur = *str;
 
     if ((*cur < '0') || (*cur > '9'))
-        return (-1);
+        return -1;
 
     while (c_isdigit(*cur)) {
         unsigned int c = *cur - '0';
 
         if ((ret > INT_MAX / 10) ||
             ((ret == INT_MAX / 10) && (c > INT_MAX % 10)))
-            return (-1);
+            return -1;
         ret = ret * 10 + c;
         cur++;
     }
     *str = cur;
-    return (ret);
+    return ret;
 }
 
 

@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2010-2011 Red Hat, Inc.
+ * Copyright (C) 2010-2012 Red Hat, Inc.
  * Copyright (C) 2008-2009 Sun Microsystems, Inc.
  *
  * This file is part of a free software library; you can redistribute
@@ -56,6 +56,7 @@
 #include "configmake.h"
 #include "virfile.h"
 #include "fdstream.h"
+#include "viruri.h"
 
 /* This one changes from version to version. */
 #if VBOX_API_VERSION == 2002
@@ -380,7 +381,7 @@ vboxIIDFromUUID_v2_x_WIN32(vboxGlobalData *data, vboxIID_v2_x_WIN32 *iid,
 static bool
 vboxIIDIsEqual_v2_x_WIN32(vboxIID_v2_x_WIN32 *iid1, vboxIID_v2_x_WIN32 *iid2)
 {
-    return memcmp(&iid1->value, &iid2->value, sizeof (GUID)) == 0;
+    return memcmp(&iid1->value, &iid2->value, sizeof(GUID)) == 0;
 }
 
 static void
@@ -391,7 +392,7 @@ vboxIIDFromArrayItem_v2_x_WIN32(vboxGlobalData *data, vboxIID_v2_x_WIN32 *iid,
 
     vboxIIDUnalloc_v2_x_WIN32(data, iid);
 
-    memcpy(&iid->value, &items[idx], sizeof (GUID));
+    memcpy(&iid->value, &items[idx], sizeof(GUID));
 }
 
 #  define vboxIIDUnalloc(iid) vboxIIDUnalloc_v2_x_WIN32(data, iid)
@@ -453,7 +454,7 @@ vboxIIDFromUUID_v2_x(vboxGlobalData *data, vboxIID_v2_x *iid,
 static bool
 vboxIIDIsEqual_v2_x(vboxIID_v2_x *iid1, vboxIID_v2_x *iid2)
 {
-    return memcmp(iid1->value, iid2->value, sizeof (nsID)) == 0;
+    return memcmp(iid1->value, iid2->value, sizeof(nsID)) == 0;
 }
 
 static void
@@ -464,7 +465,7 @@ vboxIIDFromArrayItem_v2_x(vboxGlobalData *data, vboxIID_v2_x *iid,
 
     iid->value = &iid->backing;
 
-    memcpy(iid->value, array->items[idx], sizeof (nsID));
+    memcpy(iid->value, array->items[idx], sizeof(nsID));
 }
 
 #  define vboxIIDUnalloc(iid) vboxIIDUnalloc_v2_x(data, iid)
@@ -979,13 +980,9 @@ static virDrvOpenStatus vboxOpen(virConnectPtr conn,
 
     virCheckFlags(VIR_CONNECT_RO, VIR_DRV_OPEN_ERROR);
 
-    if (conn->uri == NULL) {
-        conn->uri = xmlParseURI(uid ? "vbox:///session" : "vbox:///system");
-        if (conn->uri == NULL) {
-            virReportOOMError();
-            return VIR_DRV_OPEN_ERROR;
-        }
-    }
+    if (conn->uri == NULL &&
+        !(conn->uri = virURIParse(uid ? "vbox:///session" : "vbox:///system")))
+        return VIR_DRV_OPEN_ERROR;
 
     if (conn->uri->scheme == NULL ||
         STRNEQ (conn->uri->scheme, "vbox"))
@@ -5051,7 +5048,7 @@ static virDomainPtr vboxDomainDefineXML(virConnectPtr conn, const char *xml) {
                                       VIR_DIV_UP(def->mem.cur_balloon, 1024));
     if (NS_FAILED(rc)) {
         vboxError(VIR_ERR_INTERNAL_ERROR,
-                  _("could not set the memory size of the domain to: %lu Kb, "
+                  _("could not set the memory size of the domain to: %llu Kb, "
                     "rc=%08x"),
                   def->mem.cur_balloon, (unsigned)rc);
     }
@@ -5297,7 +5294,10 @@ vboxDomainUndefineFlags(virDomainPtr dom, unsigned int flags)
 
         ((IMachine_Delete)machine->vtbl->Delete)(machine, &safeArray, &progress);
 # else
-        machine->vtbl->Delete(machine, 0, NULL, &progress);
+        /* XPCOM doesn't like NULL as an array, even when the array size is 0.
+         * Instead pass it a dummy array to avoid passing NULL. */
+        IMedium *array[] = { NULL };
+        machine->vtbl->Delete(machine, 0, array, &progress);
 # endif
         if (progress != NULL) {
             progress->vtbl->WaitForCompletion(progress, -1);

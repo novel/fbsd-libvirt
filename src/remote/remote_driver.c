@@ -26,8 +26,6 @@
 #include <unistd.h>
 #include <assert.h>
 
-#include <libxml/uri.h>
-
 #include "virnetclient.h"
 #include "virnetclientprogram.h"
 #include "virnetclientstream.h"
@@ -37,7 +35,6 @@
 #include "domain_event.h"
 #include "driver.h"
 #include "buf.h"
-#include "qparams.h"
 #include "remote_driver.h"
 #include "remote_protocol.h"
 #include "qemu_protocol.h"
@@ -47,6 +44,9 @@
 #include "command.h"
 #include "intprops.h"
 #include "virtypedparam.h"
+#include "viruri.h"
+#include "virauth.h"
+#include "virauthconfig.h"
 
 #define VIR_FROM_THIS VIR_FROM_REMOTE
 
@@ -184,7 +184,7 @@ remoteFindDaemonPath(void)
     const char *customDaemon = getenv("LIBVIRTD_PATH");
 
     if (customDaemon)
-        return(customDaemon);
+        return customDaemon;
 
     for (i = 0; serverPaths[i]; i++) {
         if (virFileIsExecutable(serverPaths[i])) {
@@ -239,6 +239,21 @@ remoteDomainBuildEventDiskChange(virNetClientProgramPtr prog,
                                  virNetClientPtr client,
                                  void *evdata, void *opaque);
 
+static void
+remoteDomainBuildEventTrayChange(virNetClientProgramPtr prog,
+                                 virNetClientPtr client,
+                                 void *evdata, void *opaque);
+
+static void
+remoteDomainBuildEventPMWakeup(virNetClientProgramPtr prog,
+                               virNetClientPtr client,
+                               void *evdata, void *opaque);
+
+static void
+remoteDomainBuildEventPMSuspend(virNetClientProgramPtr prog,
+                                virNetClientPtr client,
+                                void *evdata, void *opaque);
+
 static virNetClientProgramEvent remoteDomainEvents[] = {
     { REMOTE_PROC_DOMAIN_EVENT_RTC_CHANGE,
       remoteDomainBuildEventRTCChange,
@@ -280,6 +295,18 @@ static virNetClientProgramEvent remoteDomainEvents[] = {
       remoteDomainBuildEventDiskChange,
       sizeof(remote_domain_event_disk_change_msg),
       (xdrproc_t)xdr_remote_domain_event_disk_change_msg },
+    { REMOTE_PROC_DOMAIN_EVENT_TRAY_CHANGE,
+      remoteDomainBuildEventTrayChange,
+      sizeof(remote_domain_event_tray_change_msg),
+      (xdrproc_t)xdr_remote_domain_event_tray_change_msg },
+    { REMOTE_PROC_DOMAIN_EVENT_PMWAKEUP,
+      remoteDomainBuildEventPMWakeup,
+      sizeof(remote_domain_event_pmwakeup_msg),
+      (xdrproc_t)xdr_remote_domain_event_pmwakeup_msg },
+    { REMOTE_PROC_DOMAIN_EVENT_PMSUSPEND,
+      remoteDomainBuildEventPMSuspend,
+      sizeof(remote_domain_event_pmsuspend_msg),
+      (xdrproc_t)xdr_remote_domain_event_pmsuspend_msg },
 };
 
 enum virDrvOpenRemoteFlags {
@@ -312,7 +339,6 @@ doRemoteOpen (virConnectPtr conn,
               virConnectAuthPtr auth ATTRIBUTE_UNUSED,
               unsigned int flags)
 {
-    struct qparam_set *vars = NULL;
     char *transport_str = NULL;
     enum {
         trans_tls,
@@ -416,21 +442,11 @@ doRemoteOpen (virConnectPtr conn,
      * feasibly it might contain variables needed by the real driver,
      * although that won't be the case for now).
      */
-    struct qparam *var;
     int i;
-    char *query;
 
     if (conn->uri) {
-#ifdef HAVE_XMLURI_QUERY_RAW
-        query = conn->uri->query_raw;
-#else
-        query = conn->uri->query;
-#endif
-        vars = qparam_query_parse (query);
-        if (vars == NULL) goto failed;
-
-        for (i = 0; i < vars->n; i++) {
-            var = &vars->p[i];
+        for (i = 0; i < conn->uri->paramsCount ; i++) {
+            virURIParamPtr var = &conn->uri->params[i];
             if (STRCASEEQ (var->name, "name")) {
                 VIR_FREE(name);
                 name = strdup (var->value);
@@ -474,6 +490,9 @@ doRemoteOpen (virConnectPtr conn,
                 pkipath = strdup(var->value);
                 if (!pkipath) goto out_of_memory;
                 var->ignore = 1;
+            } else if (STRCASEEQ(var->name, "authfile")) {
+                /* Strip this param, used by virauth.c */
+                var->ignore = 1;
             } else {
                 VIR_DEBUG("passing through variable '%s' ('%s') to remote end",
                       var->name, var->value);
@@ -486,15 +505,12 @@ doRemoteOpen (virConnectPtr conn,
                 (STREQ(conn->uri->scheme, "remote") ||
                  STRPREFIX(conn->uri->scheme, "remote+"))) {
                 /* Allow remote serve to probe */
-                name = strdup("");
+                if (!(name = strdup("")))
+                    goto out_of_memory;
             } else {
-                xmlURI tmpuri = {
+                virURI tmpuri = {
                     .scheme = conn->uri->scheme,
-#ifdef HAVE_XMLURI_QUERY_RAW
-                    .query_raw = qparam_get_query (vars),
-#else
-                    .query = qparam_get_query (vars),
-#endif
+                    .query = virURIFormatParams(conn->uri),
                     .path = conn->uri->path,
                     .fragment = conn->uri->fragment,
                 };
@@ -505,30 +521,22 @@ doRemoteOpen (virConnectPtr conn,
                     transport_str[-1] = '\0';
                 }
 
-                name = (char *) xmlSaveUri (&tmpuri);
+                name = virURIFormat(&tmpuri);
 
-#ifdef HAVE_XMLURI_QUERY_RAW
-                VIR_FREE(tmpuri.query_raw);
-#else
                 VIR_FREE(tmpuri.query);
-#endif
 
                 /* Restore transport scheme */
                 if (transport_str)
                     transport_str[-1] = '+';
+
+                if (!name)
+                    goto failed;
             }
         }
-
-        free_qparam_set (vars);
-        vars = NULL;
     } else {
         /* Probe URI server side */
-        name = strdup("");
-    }
-
-    if (!name) {
-        virReportOOMError();
-        goto failed;
+        if (!(name = strdup("")))
+            goto out_of_memory;
     }
 
     VIR_DEBUG("proceeding with name = %s", name);
@@ -711,7 +719,7 @@ doRemoteOpen (virConnectPtr conn,
         remote_get_uri_ret uriret;
 
         VIR_DEBUG("Trying to query remote URI");
-        memset (&uriret, 0, sizeof uriret);
+        memset (&uriret, 0, sizeof(uriret));
         if (call (conn, priv, 0,
                   REMOTE_PROC_GET_URI,
                   (xdrproc_t) xdr_void, (char *) NULL,
@@ -719,12 +727,10 @@ doRemoteOpen (virConnectPtr conn,
             goto failed;
 
         VIR_DEBUG("Auto-probed URI is %s", uriret.uri);
-        conn->uri = xmlParseURI(uriret.uri);
+        conn->uri = virURIParse(uriret.uri);
         VIR_FREE(uriret.uri);
-        if (!conn->uri) {
-            virReportOOMError();
+        if (!conn->uri)
             goto failed;
-        }
     }
 
     if (!(priv->domainEventState = virDomainEventStateNew()))
@@ -749,10 +755,10 @@ doRemoteOpen (virConnectPtr conn,
 
  out_of_memory:
     virReportOOMError();
-    if (vars)
-        free_qparam_set (vars);
 
  failed:
+    virNetClientProgramFree(priv->remoteProgram);
+    virNetClientProgramFree(priv->qemuProgram);
     virNetClientClose(priv->client);
     virNetClientFree(priv->client);
     priv->client = NULL;
@@ -968,7 +974,7 @@ remoteType (virConnectPtr conn)
         goto done;
     }
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_GET_TYPE,
               (xdrproc_t) xdr_void, (char *) NULL,
               (xdrproc_t) xdr_remote_get_type_ret, (char *) &ret) == -1)
@@ -989,7 +995,7 @@ static int remoteIsSecure(virConnectPtr conn)
     remote_is_secure_ret ret;
     remoteDriverLock(priv);
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_IS_SECURE,
               (xdrproc_t) xdr_void, (char *) NULL,
               (xdrproc_t) xdr_remote_is_secure_ret, (char *) &ret) == -1)
@@ -1018,7 +1024,7 @@ static int remoteIsEncrypted(virConnectPtr conn)
     remote_is_secure_ret ret;
     remoteDriverLock(priv);
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_IS_SECURE,
               (xdrproc_t) xdr_void, (char *) NULL,
               (xdrproc_t) xdr_remote_is_secure_ret, (char *) &ret) == -1)
@@ -1060,7 +1066,7 @@ remoteNodeGetCPUStats (virConnectPtr conn,
     args.cpuNum = cpuNum;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_NODE_GET_CPU_STATS,
               (xdrproc_t) xdr_remote_node_get_cpu_stats_args,
               (char *) &args,
@@ -1126,7 +1132,7 @@ remoteNodeGetMemoryStats (virConnectPtr conn,
     args.cellNum = cellNum;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_NODE_GET_MEMORY_STATS,
               (xdrproc_t) xdr_remote_node_get_memory_stats_args, (char *) &args,
               (xdrproc_t) xdr_remote_node_get_memory_stats_ret, (char *) &ret) == -1)
@@ -1196,7 +1202,7 @@ remoteNodeGetCellsFreeMemory(virConnectPtr conn,
     args.startCell = startCell;
     args.maxcells = maxCells;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_NODE_GET_CELLS_FREE_MEMORY,
               (xdrproc_t) xdr_remote_node_get_cells_free_memory_args, (char *)&args,
               (xdrproc_t) xdr_remote_node_get_cells_free_memory_ret, (char *)&ret) == -1)
@@ -1233,7 +1239,7 @@ remoteListDomains (virConnectPtr conn, int *ids, int maxids)
     }
     args.maxids = maxids;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_LIST_DOMAINS,
               (xdrproc_t) xdr_remote_list_domains_args, (char *) &args,
               (xdrproc_t) xdr_remote_list_domains_ret, (char *) &ret) == -1)
@@ -1475,7 +1481,7 @@ remoteDomainBlockStatsFlags(virDomainPtr domain,
     args.path = (char *) path;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_BLOCK_STATS_FLAGS,
               (xdrproc_t) xdr_remote_domain_block_stats_flags_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_block_stats_flags_ret, (char *) &ret) == -1)
@@ -1535,7 +1541,7 @@ remoteDomainGetMemoryParameters (virDomainPtr domain,
     args.nparams = *nparams;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_MEMORY_PARAMETERS,
               (xdrproc_t) xdr_remote_domain_get_memory_parameters_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_memory_parameters_ret, (char *) &ret) == -1)
@@ -1583,7 +1589,7 @@ remoteDomainGetNumaParameters (virDomainPtr domain,
     args.nparams = *nparams;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_NUMA_PARAMETERS,
               (xdrproc_t) xdr_remote_domain_get_numa_parameters_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_numa_parameters_ret, (char *) &ret) == -1)
@@ -1631,7 +1637,7 @@ remoteDomainGetBlkioParameters (virDomainPtr domain,
     args.nparams = *nparams;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_BLKIO_PARAMETERS,
               (xdrproc_t) xdr_remote_domain_get_blkio_parameters_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_blkio_parameters_ret, (char *) &ret) == -1)
@@ -1698,7 +1704,7 @@ remoteDomainGetVcpuPinInfo (virDomainPtr domain,
     args.maplen = maplen;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
 
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_VCPU_PIN_INFO,
               (xdrproc_t) xdr_remote_domain_get_vcpu_pin_info_args,
@@ -1769,7 +1775,7 @@ remoteDomainGetVcpus (virDomainPtr domain,
     args.maxinfo = maxinfo;
     args.maplen = maplen;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_VCPUS,
               (xdrproc_t) xdr_remote_domain_get_vcpus_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_vcpus_ret, (char *) &ret) == -1)
@@ -1788,7 +1794,7 @@ remoteDomainGetVcpus (virDomainPtr domain,
         goto cleanup;
     }
 
-    memset (info, 0, sizeof (virVcpuInfo) * maxinfo);
+    memset (info, 0, sizeof(virVcpuInfo) * maxinfo);
     memset (cpumaps, 0, maxinfo * maplen);
 
     for (i = 0; i < ret.info.info_len; ++i) {
@@ -1822,8 +1828,8 @@ remoteDomainGetSecurityLabel (virDomainPtr domain, virSecurityLabelPtr seclabel)
     remoteDriverLock(priv);
 
     make_nonnull_domain (&args.dom, domain);
-    memset (&ret, 0, sizeof ret);
-    memset (seclabel, 0, sizeof (*seclabel));
+    memset (&ret, 0, sizeof(ret));
+    memset (seclabel, 0, sizeof(*seclabel));
 
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_SECURITY_LABEL,
               (xdrproc_t) xdr_remote_domain_get_security_label_args, (char *)&args,
@@ -1832,9 +1838,9 @@ remoteDomainGetSecurityLabel (virDomainPtr domain, virSecurityLabelPtr seclabel)
     }
 
     if (ret.label.label_val != NULL) {
-        if (strlen (ret.label.label_val) >= sizeof seclabel->label) {
-            remoteError(VIR_ERR_RPC, _("security label exceeds maximum: %zd"),
-                        sizeof seclabel->label - 1);
+        if (strlen (ret.label.label_val) >= sizeof(seclabel->label)) {
+            remoteError(VIR_ERR_RPC, _("security label exceeds maximum: %zu"),
+                        sizeof(seclabel->label) - 1);
             goto cleanup;
         }
         strcpy (seclabel->label, ret.label.label_val);
@@ -1867,7 +1873,7 @@ remoteDomainGetState(virDomainPtr domain,
     make_nonnull_domain(&args.dom, domain);
     args.flags = flags;
 
-    memset(&ret, 0, sizeof ret);
+    memset(&ret, 0, sizeof(ret));
     if (call(domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_STATE,
              (xdrproc_t) xdr_remote_domain_get_state_args, (char *) &args,
              (xdrproc_t) xdr_remote_domain_get_state_ret, (char *) &ret) == -1)
@@ -1893,8 +1899,8 @@ remoteNodeGetSecurityModel (virConnectPtr conn, virSecurityModelPtr secmodel)
 
     remoteDriverLock(priv);
 
-    memset (&ret, 0, sizeof ret);
-    memset (secmodel, 0, sizeof (*secmodel));
+    memset (&ret, 0, sizeof(ret));
+    memset (secmodel, 0, sizeof(*secmodel));
 
     if (call (conn, priv, 0, REMOTE_PROC_NODE_GET_SECURITY_MODEL,
               (xdrproc_t) xdr_void, NULL,
@@ -1903,18 +1909,18 @@ remoteNodeGetSecurityModel (virConnectPtr conn, virSecurityModelPtr secmodel)
     }
 
     if (ret.model.model_val != NULL) {
-        if (strlen (ret.model.model_val) >= sizeof secmodel->model) {
-            remoteError(VIR_ERR_RPC, _("security model exceeds maximum: %zd"),
-                        sizeof secmodel->model - 1);
+        if (strlen (ret.model.model_val) >= sizeof(secmodel->model)) {
+            remoteError(VIR_ERR_RPC, _("security model exceeds maximum: %zu"),
+                        sizeof(secmodel->model) - 1);
             goto cleanup;
         }
         strcpy (secmodel->model, ret.model.model_val);
     }
 
     if (ret.doi.doi_val != NULL) {
-        if (strlen (ret.doi.doi_val) >= sizeof secmodel->doi) {
-            remoteError(VIR_ERR_RPC, _("security doi exceeds maximum: %zd"),
-                        sizeof secmodel->doi - 1);
+        if (strlen (ret.doi.doi_val) >= sizeof(secmodel->doi)) {
+            remoteError(VIR_ERR_RPC, _("security doi exceeds maximum: %zu"),
+                        sizeof(secmodel->doi) - 1);
             goto cleanup;
         }
         strcpy (secmodel->doi, ret.doi.doi_val);
@@ -1949,7 +1955,7 @@ remoteDomainMigratePrepare (virConnectPtr dconn,
     args.dname = dname == NULL ? NULL : (char **) &dname;
     args.resource = resource;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (dconn, priv, 0, REMOTE_PROC_DOMAIN_MIGRATE_PREPARE,
               (xdrproc_t) xdr_remote_domain_migrate_prepare_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_migrate_prepare_ret, (char *) &ret) == -1)
@@ -1962,6 +1968,7 @@ remoteDomainMigratePrepare (virConnectPtr dconn,
     if (ret.uri_out)
         *uri_out = *ret.uri_out; /* Caller frees. */
 
+    VIR_FREE(ret.uri_out);
     rv = 0;
 
 done:
@@ -1990,7 +1997,7 @@ remoteDomainMigratePrepare2 (virConnectPtr dconn,
     args.resource = resource;
     args.dom_xml = (char *) dom_xml;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (dconn, priv, 0, REMOTE_PROC_DOMAIN_MIGRATE_PREPARE2,
               (xdrproc_t) xdr_remote_domain_migrate_prepare2_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_migrate_prepare2_ret, (char *) &ret) == -1)
@@ -2017,6 +2024,7 @@ remoteDomainMigratePrepare2 (virConnectPtr dconn,
     rv = 0;
 
 done:
+    VIR_FREE(ret.uri_out);
     remoteDriverUnlock(priv);
     return rv;
 error:
@@ -2050,7 +2058,7 @@ remoteDomainCreate (virDomainPtr domain)
      * it returned.
      */
     memcpy (args2.uuid, domain->uuid, VIR_UUID_BUFLEN);
-    memset (&ret2, 0, sizeof ret2);
+    memset (&ret2, 0, sizeof(ret2));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_LOOKUP_BY_UUID,
               (xdrproc_t) xdr_remote_domain_lookup_by_uuid_args, (char *) &args2,
               (xdrproc_t) xdr_remote_domain_lookup_by_uuid_ret, (char *) &ret2) == -1)
@@ -2078,7 +2086,7 @@ remoteDomainGetSchedulerType (virDomainPtr domain, int *nparams)
 
     make_nonnull_domain (&args.dom, domain);
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_SCHEDULER_TYPE,
               (xdrproc_t) xdr_remote_domain_get_scheduler_type_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_scheduler_type_ret, (char *) &ret) == -1)
@@ -2117,7 +2125,7 @@ remoteDomainMemoryStats (virDomainPtr domain,
     }
     args.maxStats = nr_stats;
     args.flags = flags;
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
 
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_MEMORY_STATS,
               (xdrproc_t) xdr_remote_domain_memory_stats_args,
@@ -2166,7 +2174,7 @@ remoteDomainBlockPeek (virDomainPtr domain,
     args.size = size;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_BLOCK_PEEK,
               (xdrproc_t) xdr_remote_domain_block_peek_args,
                 (char *) &args,
@@ -2217,7 +2225,7 @@ remoteDomainMemoryPeek (virDomainPtr domain,
     args.size = size;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_MEMORY_PEEK,
               (xdrproc_t) xdr_remote_domain_memory_peek_args,
                 (char *) &args,
@@ -2381,7 +2389,7 @@ static int remoteDomainGetCPUStats(virDomainPtr domain,
     /* Check the length of the returned list carefully. */
     if (ret.params.params_len > nparams * ncpus ||
         (ret.params.params_len &&
-         ret.nparams * ncpus != ret.params.params_len)) {
+         ((ret.params.params_len % ret.nparams) || ret.nparams > nparams))) {
         remoteError(VIR_ERR_RPC, "%s",
                     _("remoteDomainGetCPUStats: "
                       "returned number of stats exceeds limit"));
@@ -2398,9 +2406,11 @@ static int remoteDomainGetCPUStats(virDomainPtr domain,
     }
 
     /* The remote side did not send back any zero entries, so we have
-     * to expand things back into a possibly sparse array.
+     * to expand things back into a possibly sparse array, where the
+     * tail of the array may be omitted.
      */
     memset(params, 0, sizeof(*params) * nparams * ncpus);
+    ncpus = ret.params.params_len / ret.nparams;
     for (cpu = 0; cpu < ncpus; cpu++) {
         int tmp = nparams;
         remote_typed_param *stride = &ret.params.params_val[cpu * ret.nparams];
@@ -2559,7 +2569,7 @@ remoteFindStoragePoolSources (virConnectPtr conn,
     args.srcSpec = srcSpec ? (char **)&srcSpec : (char **)&emptyString;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_FIND_STORAGE_POOL_SOURCES,
               (xdrproc_t) xdr_remote_find_storage_pool_sources_args, (char *) &args,
               (xdrproc_t) xdr_remote_find_storage_pool_sources_ret, (char *) &ret) == -1)
@@ -2690,7 +2700,7 @@ remoteAuthenticate (virConnectPtr conn, struct private_data *priv,
     struct remote_auth_list_ret ret;
     int err, type = REMOTE_AUTH_NONE;
 
-    memset(&ret, 0, sizeof ret);
+    memset(&ret, 0, sizeof(ret));
     err = call (conn, priv, 0,
                 REMOTE_PROC_AUTH_LIST,
                 (xdrproc_t) xdr_void, (char *) NULL,
@@ -2885,42 +2895,43 @@ static sasl_callback_t *remoteAuthMakeCallbacks(int *credtype, int ncredtype)
  * are basically a 1-to-1 copy of each other.
  */
 static int remoteAuthMakeCredentials(sasl_interact_t *interact,
-                                     virConnectCredentialPtr *cred)
+                                     virConnectCredentialPtr *cred,
+                                     size_t *ncred)
 {
     int ninteract;
     if (!cred)
         return -1;
 
-    for (ninteract = 0 ; interact[ninteract].id != 0 ; ninteract++)
-        ; /* empty */
+    for (ninteract = 0, *ncred = 0 ; interact[ninteract].id != 0 ; ninteract++) {
+        if (interact[ninteract].result)
+            continue;
+        (*ncred)++;
+    }
 
-    if (VIR_ALLOC_N(*cred, ninteract) < 0)
+    if (VIR_ALLOC_N(*cred, *ncred) < 0)
         return -1;
 
-    for (ninteract = 0 ; interact[ninteract].id != 0 ; ninteract++) {
-        (*cred)[ninteract].type = remoteAuthCredSASL2Vir(interact[ninteract].id);
-        if (!(*cred)[ninteract].type) {
+    for (ninteract = 0, *ncred = 0 ; interact[ninteract].id != 0 ; ninteract++) {
+        if (interact[ninteract].result)
+            continue;
+
+        (*cred)[*ncred].type = remoteAuthCredSASL2Vir(interact[ninteract].id);
+        if (!(*cred)[*ncred].type) {
+            *ncred = 0;
             VIR_FREE(*cred);
             return -1;
         }
-        if (interact[ninteract].challenge)
-            (*cred)[ninteract].challenge = interact[ninteract].challenge;
-        (*cred)[ninteract].prompt = interact[ninteract].prompt;
-        if (interact[ninteract].defresult)
-            (*cred)[ninteract].defresult = interact[ninteract].defresult;
-        (*cred)[ninteract].result = NULL;
+        if (interact[*ncred].challenge)
+            (*cred)[*ncred].challenge = interact[ninteract].challenge;
+        (*cred)[*ncred].prompt = interact[ninteract].prompt;
+        if (interact[*ncred].defresult)
+            (*cred)[*ncred].defresult = interact[ninteract].defresult;
+        (*cred)[*ncred].result = NULL;
+
+        (*ncred)++;
     }
 
-    return ninteract;
-}
-
-static void remoteAuthFreeCredentials(virConnectCredentialPtr cred,
-                                      int ncred)
-{
-    int i;
-    for (i = 0 ; i < ncred ; i++)
-        VIR_FREE(cred[i].result);
-    VIR_FREE(cred);
+    return 0;
 }
 
 
@@ -2934,12 +2945,152 @@ static void remoteAuthFreeCredentials(virConnectCredentialPtr cred,
 static void remoteAuthFillInteract(virConnectCredentialPtr cred,
                                    sasl_interact_t *interact)
 {
-    int ninteract;
-    for (ninteract = 0 ; interact[ninteract].id != 0 ; ninteract++) {
-        interact[ninteract].result = cred[ninteract].result;
-        interact[ninteract].len = cred[ninteract].resultlen;
+    int ninteract, ncred;
+    for (ninteract = 0, ncred = 0 ; interact[ninteract].id != 0 ; ninteract++) {
+        if (interact[ninteract].result)
+            continue;
+        interact[ninteract].result = cred[ncred].result;
+        interact[ninteract].len = cred[ncred].resultlen;
+        ncred++;
     }
 }
+
+struct remoteAuthInteractState {
+    sasl_interact_t *interact;
+    virConnectCredentialPtr cred;
+    size_t ncred;
+    virAuthConfigPtr config;
+};
+
+
+
+static int remoteAuthFillFromConfig(virConnectPtr conn,
+                                    struct remoteAuthInteractState *state)
+{
+    int ret = -1;
+    int ninteract;
+    const char *credname;
+    char *path = NULL;
+
+    VIR_DEBUG("Trying to fill auth parameters from config file");
+
+    if (!state->config) {
+        if (virAuthGetConfigFilePath(conn, &path) < 0)
+            goto cleanup;
+        if (path == NULL) {
+            ret = 0;
+            goto cleanup;
+        }
+
+        if (!(state->config = virAuthConfigNew(path)))
+            goto cleanup;
+    }
+
+    for (ninteract = 0 ; state->interact[ninteract].id != 0 ; ninteract++) {
+        const char *value = NULL;
+
+        switch (state->interact[ninteract].id) {
+        case SASL_CB_USER:
+            credname = "username";
+            break;
+        case SASL_CB_AUTHNAME:
+            credname = "authname";
+            break;
+        case SASL_CB_PASS:
+            credname = "password";
+            break;
+        case SASL_CB_GETREALM:
+            credname = "realm";
+            break;
+        default:
+            credname = NULL;
+            break;
+        }
+
+        if (virAuthConfigLookup(state->config,
+                                "libvirt",
+                                conn->uri->server,
+                                credname,
+                                &value) < 0)
+            goto cleanup;
+
+        if (value) {
+            state->interact[ninteract].result = value;
+            state->interact[ninteract].len = strlen(value);
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    VIR_FREE(path);
+    return ret;
+}
+
+
+static void remoteAuthInteractStateClear(struct remoteAuthInteractState *state,
+                                         bool final)
+{
+    size_t i;
+    if (!state)
+        return;
+
+    for (i = 0 ; i < state->ncred ; i++)
+        VIR_FREE(state->cred[i].result);
+    VIR_FREE(state->cred);
+    state->ncred = 0;
+
+    if (final)
+        virAuthConfigFree(state->config);
+}
+
+
+static int remoteAuthInteract(virConnectPtr conn,
+                              struct remoteAuthInteractState *state,
+                              virConnectAuthPtr auth)
+{
+    int ret = -1;
+
+    VIR_DEBUG("Starting SASL interaction");
+    remoteAuthInteractStateClear(state, false);
+
+    if (remoteAuthFillFromConfig(conn, state) < 0)
+        goto cleanup;
+
+    if (remoteAuthMakeCredentials(state->interact, &state->cred, &state->ncred) < 0) {
+        remoteError(VIR_ERR_AUTH_FAILED, "%s",
+                    _("Failed to make auth credentials"));
+        goto cleanup;
+    }
+
+    /* Run the authentication callback */
+    if (!auth || !auth->cb) {
+        remoteError(VIR_ERR_AUTH_FAILED, "%s",
+                    _("No authentication callback available"));
+        goto cleanup;
+    }
+
+    if ((*(auth->cb))(state->cred, state->ncred, auth->cbdata) < 0) {
+        remoteError(VIR_ERR_AUTH_FAILED, "%s",
+                    _("Failed to collect auth credentials"));
+        goto cleanup;
+    }
+
+    remoteAuthFillInteract(state->cred, state->interact);
+    /*
+     * 'interact' now has pointers to strings in 'state->cred'
+     * so we must not free state->cred until the *next*
+     * sasl_start/step function is complete. Hence we
+     * call remoteAuthInteractStateClear() at the *start*
+     * of this method, rather than the end.
+     */
+
+    ret = 0;
+
+cleanup:
+    return ret;
+}
+
 
 /* Perform the SASL authentication process
  */
@@ -2959,13 +3110,13 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
     int err, complete;
     int ssf;
     sasl_callback_t *saslcb = NULL;
-    sasl_interact_t *interact = NULL;
-    virConnectCredentialPtr cred = NULL;
-    int ncred = 0;
     int ret = -1;
     const char *mechlist;
     virNetSASLContextPtr saslCtxt;
     virNetSASLSessionPtr sasl = NULL;
+    struct remoteAuthInteractState state;
+
+    memset(&state, 0, sizeof(state));
 
     VIR_DEBUG("Client initialize SASL authentication");
 
@@ -3009,7 +3160,7 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
         goto cleanup;
 
     /* First call is to inquire about supported mechanisms in the server */
-    memset (&iret, 0, sizeof iret);
+    memset (&iret, 0, sizeof(iret));
     if (call (conn, priv, 0, REMOTE_PROC_AUTH_SASL_INIT,
               (xdrproc_t) xdr_void, (char *)NULL,
               (xdrproc_t) xdr_remote_auth_sasl_init_ret, (char *) &iret) != 0)
@@ -3032,7 +3183,7 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
     VIR_DEBUG("Client start negotiation mechlist '%s'", mechlist);
     if ((err = virNetSASLSessionClientStart(sasl,
                                             mechlist,
-                                            &interact,
+                                            &state.interact,
                                             &clientout,
                                             &clientoutlen,
                                             &mech)) < 0)
@@ -3040,29 +3191,11 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
 
     /* Need to gather some credentials from the client */
     if (err == VIR_NET_SASL_INTERACT) {
-        const char *msg;
-        if (cred) {
-            remoteAuthFreeCredentials(cred, ncred);
-            cred = NULL;
-        }
-        if ((ncred = remoteAuthMakeCredentials(interact, &cred)) < 0) {
-            remoteError(VIR_ERR_AUTH_FAILED, "%s",
-                        _("Failed to make auth credentials"));
+        if (remoteAuthInteract(conn, &state, auth) < 0) {
             VIR_FREE(iret.mechlist);
             goto cleanup;
         }
-        /* Run the authentication callback */
-        if (auth && auth->cb) {
-            if ((*(auth->cb))(cred, ncred, auth->cbdata) >= 0) {
-                remoteAuthFillInteract(cred, interact);
-                goto restart;
-            }
-            msg = "Failed to collect auth credentials";
-        } else {
-            msg = "No authentication callback available";
-        }
-        remoteError(VIR_ERR_AUTH_FAILED, "%s", msg);
-        goto cleanup;
+        goto restart;
     }
     VIR_FREE(iret.mechlist);
 
@@ -3073,7 +3206,7 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
         goto cleanup;
     }
     /* NB, distinction of NULL vs "" is *critical* in SASL */
-    memset(&sargs, 0, sizeof sargs);
+    memset(&sargs, 0, sizeof(sargs));
     sargs.nil = clientout ? 0 : 1;
     sargs.data.data_val = (char*)clientout;
     sargs.data.data_len = clientoutlen;
@@ -3082,7 +3215,7 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
               mech, clientoutlen, clientout);
 
     /* Now send the initial auth data to the server */
-    memset (&sret, 0, sizeof sret);
+    memset (&sret, 0, sizeof(sret));
     if (call (conn, priv, 0, REMOTE_PROC_AUTH_SASL_START,
               (xdrproc_t) xdr_remote_auth_sasl_start_args, (char *) &sargs,
               (xdrproc_t) xdr_remote_auth_sasl_start_ret, (char *) &sret) != 0)
@@ -3103,35 +3236,18 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
         if ((err = virNetSASLSessionClientStep(sasl,
                                                serverin,
                                                serverinlen,
-                                               &interact,
+                                               &state.interact,
                                                &clientout,
                                                &clientoutlen)) < 0)
             goto cleanup;
 
         /* Need to gather some credentials from the client */
         if (err == VIR_NET_SASL_INTERACT) {
-            const char *msg;
-            if (cred) {
-                remoteAuthFreeCredentials(cred, ncred);
-                cred = NULL;
-            }
-            if ((ncred = remoteAuthMakeCredentials(interact, &cred)) < 0) {
-                remoteError(VIR_ERR_AUTH_FAILED, "%s",
-                            _("Failed to make auth credentials"));
+            if (remoteAuthInteract(conn, &state, auth) < 0) {
+                VIR_FREE(iret.mechlist);
                 goto cleanup;
             }
-            /* Run the authentication callback */
-            if (auth && auth->cb) {
-                if ((*(auth->cb))(cred, ncred, auth->cbdata) >= 0) {
-                    remoteAuthFillInteract(cred, interact);
-                    goto restep;
-                }
-                msg = _("Failed to collect auth credentials");
-            } else {
-                msg = _("No authentication callback available");
-            }
-            remoteError(VIR_ERR_AUTH_FAILED, "%s", msg);
-            goto cleanup;
+            goto restep;
         }
 
         VIR_FREE(serverin);
@@ -3144,14 +3260,14 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
 
         /* Not done, prepare to talk with the server for another iteration */
         /* NB, distinction of NULL vs "" is *critical* in SASL */
-        memset(&pargs, 0, sizeof pargs);
+        memset(&pargs, 0, sizeof(pargs));
         pargs.nil = clientout ? 0 : 1;
         pargs.data.data_val = (char*)clientout;
         pargs.data.data_len = clientoutlen;
         VIR_DEBUG("Server step with %zu bytes %p",
                   clientoutlen, clientout);
 
-        memset (&pret, 0, sizeof pret);
+        memset (&pret, 0, sizeof(pret));
         if (call (conn, priv, 0, REMOTE_PROC_AUTH_SASL_STEP,
                   (xdrproc_t) xdr_remote_auth_sasl_step_args, (char *) &pargs,
                   (xdrproc_t) xdr_remote_auth_sasl_step_ret, (char *) &pret) != 0)
@@ -3193,8 +3309,8 @@ remoteAuthSASL (virConnectPtr conn, struct private_data *priv,
  cleanup:
     VIR_FREE(serverin);
 
+    remoteAuthInteractStateClear(&state, true);
     VIR_FREE(saslcb);
-    remoteAuthFreeCredentials(cred, ncred);
     virNetSASLSessionFree(sasl);
     virNetSASLContextFree(saslCtxt);
 
@@ -3212,7 +3328,7 @@ remoteAuthPolkit (virConnectPtr conn, struct private_data *priv,
     remote_auth_polkit_ret ret;
     VIR_DEBUG("Client initialize PolicyKit-1 authentication");
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_AUTH_POLKIT,
               (xdrproc_t) xdr_void, (char *)NULL,
               (xdrproc_t) xdr_remote_auth_polkit_ret, (char *) &ret) != 0) {
@@ -3242,7 +3358,7 @@ remoteAuthPolkit (virConnectPtr conn, struct private_data *priv,
     VIR_DEBUG("Client initialize PolicyKit-0 authentication");
 
     /* Check auth first and if it succeeds we are done. */
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_AUTH_POLKIT,
               (xdrproc_t) xdr_void, (char *)NULL,
               (xdrproc_t) xdr_remote_auth_polkit_ret, (char *) &ret) == 0)
@@ -3273,7 +3389,7 @@ remoteAuthPolkit (virConnectPtr conn, struct private_data *priv,
         return -1;
     }
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (conn, priv, 0, REMOTE_PROC_AUTH_POLKIT,
               (xdrproc_t) xdr_void, (char *)NULL,
               (xdrproc_t) xdr_remote_auth_polkit_ret, (char *) &ret) != 0) {
@@ -3642,6 +3758,74 @@ remoteDomainBuildEventDiskChange(virNetClientProgramPtr prog ATTRIBUTE_UNUSED,
 }
 
 
+static void
+remoteDomainBuildEventTrayChange(virNetClientProgramPtr prog ATTRIBUTE_UNUSED,
+                                 virNetClientPtr client ATTRIBUTE_UNUSED,
+                                 void *evdata, void *opaque)
+{
+    virConnectPtr conn = opaque;
+    struct private_data *priv = conn->privateData;
+    remote_domain_event_tray_change_msg *msg = evdata;
+    virDomainPtr dom;
+    virDomainEventPtr event = NULL;
+
+    dom = get_nonnull_domain(conn, msg->dom);
+    if (!dom)
+        return;
+
+    event = virDomainEventTrayChangeNewFromDom(dom,
+                                               msg->devAlias,
+                                               msg->reason);
+
+    virDomainFree(dom);
+
+    remoteDomainEventQueue(priv, event);
+}
+
+static void
+remoteDomainBuildEventPMWakeup(virNetClientProgramPtr prog ATTRIBUTE_UNUSED,
+                               virNetClientPtr client ATTRIBUTE_UNUSED,
+                               void *evdata, void *opaque)
+{
+    virConnectPtr conn = opaque;
+    struct private_data *priv = conn->privateData;
+    remote_domain_event_pmwakeup_msg *msg = evdata;
+    virDomainPtr dom;
+    virDomainEventPtr event = NULL;
+
+    dom = get_nonnull_domain(conn, msg->dom);
+    if (!dom)
+        return;
+
+    event = virDomainEventPMWakeupNewFromDom(dom);
+
+    virDomainFree(dom);
+
+    remoteDomainEventQueue(priv, event);
+}
+
+static void
+remoteDomainBuildEventPMSuspend(virNetClientProgramPtr prog ATTRIBUTE_UNUSED,
+                                virNetClientPtr client ATTRIBUTE_UNUSED,
+                                void *evdata, void *opaque)
+{
+    virConnectPtr conn = opaque;
+    struct private_data *priv = conn->privateData;
+    remote_domain_event_pmsuspend_msg *msg = evdata;
+    virDomainPtr dom;
+    virDomainEventPtr event = NULL;
+
+    dom = get_nonnull_domain(conn, msg->dom);
+    if (!dom)
+        return;
+
+    event = virDomainEventPMSuspendNewFromDom(dom);
+
+    virDomainFree(dom);
+
+    remoteDomainEventQueue(priv, event);
+}
+
 static virDrvOpenStatus ATTRIBUTE_NONNULL (1)
 remoteSecretOpen(virConnectPtr conn, virConnectAuthPtr auth,
                  unsigned int flags)
@@ -3675,7 +3859,7 @@ remoteSecretGetValue (virSecretPtr secret, size_t *value_size,
     make_nonnull_secret (&args.secret, secret);
     args.flags = flags;
 
-    memset (&ret, 0, sizeof (ret));
+    memset (&ret, 0, sizeof(ret));
     if (call (secret->conn, priv, 0, REMOTE_PROC_SECRET_GET_VALUE,
               (xdrproc_t) xdr_remote_secret_get_value_args, (char *) &args,
               (xdrproc_t) xdr_remote_secret_get_value_ret, (char *) &ret) == -1)
@@ -4025,7 +4209,7 @@ remoteQemuDomainMonitorCommand (virDomainPtr domain, const char *cmd,
     args.cmd = (char *)cmd;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, REMOTE_CALL_QEMU, QEMU_PROC_MONITOR_COMMAND,
               (xdrproc_t) xdr_qemu_monitor_command_args, (char *) &args,
               (xdrproc_t) xdr_qemu_monitor_command_ret, (char *) &ret) == -1)
@@ -4131,7 +4315,7 @@ remoteDomainMigratePrepare3(virConnectPtr dconn,
     args.resource = resource;
     args.dom_xml = (char *) dom_xml;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (dconn, priv, 0, REMOTE_PROC_DOMAIN_MIGRATE_PREPARE3,
               (xdrproc_t) xdr_remote_domain_migrate_prepare3_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_migrate_prepare3_ret, (char *) &ret) == -1)
@@ -4158,6 +4342,7 @@ remoteDomainMigratePrepare3(virConnectPtr dconn,
     rv = 0;
 
 done:
+    VIR_FREE(ret.uri_out);
     remoteDriverUnlock(priv);
     return rv;
 error:
@@ -4446,7 +4631,12 @@ remoteSetKeepAlive(virConnectPtr conn, int interval, unsigned int count)
         goto cleanup;
     }
 
-    ret = virNetClientKeepAliveStart(priv->client, interval, count);
+    if (interval > 0) {
+        ret = virNetClientKeepAliveStart(priv->client, interval, count);
+    } else {
+        virNetClientKeepAliveStop(priv->client);
+        ret = 0;
+    }
 
 cleanup:
     remoteDriverUnlock(priv);
@@ -4488,7 +4678,7 @@ remoteDomainGetDiskErrors(virDomainPtr dom,
     args.maxerrors = maxerrors;
     args.flags = flags;
 
-    memset(&ret, 0, sizeof ret);
+    memset(&ret, 0, sizeof(ret));
 
     if (call(dom->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_DISK_ERRORS,
              (xdrproc_t) xdr_remote_domain_get_disk_errors_args,
@@ -4588,7 +4778,7 @@ remoteDomainGetInterfaceParameters (virDomainPtr domain,
     args.nparams = *nparams;
     args.flags = flags;
 
-    memset (&ret, 0, sizeof ret);
+    memset (&ret, 0, sizeof(ret));
     if (call (domain->conn, priv, 0, REMOTE_PROC_DOMAIN_GET_INTERFACE_PARAMETERS,
               (xdrproc_t) xdr_remote_domain_get_interface_parameters_args, (char *) &args,
               (xdrproc_t) xdr_remote_domain_get_interface_parameters_ret, (char *) &ret) == -1)
@@ -4780,6 +4970,7 @@ static virDriver remote_driver = {
     .domainSuspend = remoteDomainSuspend, /* 0.3.0 */
     .domainResume = remoteDomainResume, /* 0.3.0 */
     .domainPMSuspendForDuration = remoteDomainPMSuspendForDuration, /* 0.9.10 */
+    .domainPMWakeup = remoteDomainPMWakeup, /* 0.9.11 */
     .domainShutdown = remoteDomainShutdown, /* 0.3.0 */
     .domainShutdownFlags = remoteDomainShutdownFlags, /* 0.9.10 */
     .domainReboot = remoteDomainReboot, /* 0.3.0 */

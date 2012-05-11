@@ -230,6 +230,7 @@ no_memory:
 static const char *defaultDomainXML =
 "<domain type='test'>"
 "  <name>test</name>"
+"  <uuid>6695eb01-f6a4-8304-79aa-97f2502e193f</uuid>"
 "  <memory>8388608</memory>"
 "  <currentMemory>2097152</currentMemory>"
 "  <vcpu>2</vcpu>"
@@ -242,6 +243,7 @@ static const char *defaultDomainXML =
 static const char *defaultNetworkXML =
 "<network>"
 "  <name>default</name>"
+"  <uuid>dd8fe884-6c02-601e-7551-cca97df1c5df</uuid>"
 "  <bridge name='virbr0' />"
 "  <forward/>"
 "  <ip address='192.168.122.1' netmask='255.255.255.0'>"
@@ -265,6 +267,7 @@ static const char *defaultInterfaceXML =
 static const char *defaultPoolXML =
 "<pool type='dir'>"
 "  <name>default-pool</name>"
+"  <uuid>dfe224cb-28fb-8dd0-c4b2-64eb3f0f4566</uuid>"
 "  <target>"
 "    <path>/default-pool</path>"
 "  </target>"
@@ -608,7 +611,7 @@ static int testOpenDefault(virConnectPtr conn) {
     virStoragePoolObjUnlock(poolobj);
 
     /* Init default node device */
-    if (!(nodedef = virNodeDeviceDefParseString(defaultNodeXML, 0)))
+    if (!(nodedef = virNodeDeviceDefParseString(defaultNodeXML, 0, NULL)))
         goto error;
     if (!(nodeobj = virNodeDeviceAssignDef(&privconn->devs,
                                            nodedef))) {
@@ -641,7 +644,7 @@ static char *testBuildFilename(const char *relativeTo,
     char *offset;
     int baseLen;
     if (!filename || filename[0] == '\0')
-        return (NULL);
+        return NULL;
     if (filename[0] == '/')
         return strdup(filename);
 
@@ -1057,12 +1060,12 @@ static int testOpenFromFile(virConnectPtr conn,
                 goto error;
             }
 
-            def = virNodeDeviceDefParseFile(absFile, 0);
+            def = virNodeDeviceDefParseFile(absFile, 0, NULL);
             VIR_FREE(absFile);
             if (!def)
                 goto error;
         } else {
-            if ((def = virNodeDeviceDefParseNode(xml, devs[i], 0)) == NULL)
+            if ((def = virNodeDeviceDefParseNode(xml, devs[i], 0, NULL)) == NULL)
                 goto error;
         }
         if (!(dev = virNodeDeviceAssignDef(&privconn->devs, def))) {
@@ -1078,7 +1081,7 @@ static int testOpenFromFile(virConnectPtr conn,
     xmlFreeDoc(xml);
     testDriverUnlock(privconn);
 
-    return (0);
+    return 0;
 
  error:
     xmlXPathFreeContext(ctxt);
@@ -1087,6 +1090,7 @@ static int testOpenFromFile(virConnectPtr conn,
     VIR_FREE(networks);
     VIR_FREE(ifaces);
     VIR_FREE(pools);
+    VIR_FREE(devs);
     virDomainObjListDeinit(&privconn->domains);
     virNetworkObjListFree(&privconn->networks);
     virInterfaceObjListFree(&privconn->ifaces);
@@ -1176,7 +1180,7 @@ static int testGetVersion(virConnectPtr conn ATTRIBUTE_UNUSED,
                           unsigned long *hvVer)
 {
     *hvVer = 2;
-    return (0);
+    return 0;
 }
 
 static int testIsSecure(virConnectPtr conn ATTRIBUTE_UNUSED)
@@ -1207,7 +1211,7 @@ static int testNodeGetInfo(virConnectPtr conn,
     testDriverLock(privconn);
     memcpy(info, &privconn->nodeInfo, sizeof(virNodeInfo));
     testDriverUnlock(privconn);
-    return (0);
+    return 0;
 }
 
 static char *testGetCapabilities (virConnectPtr conn)
@@ -2021,10 +2025,10 @@ static char *testGetOSType(virDomainPtr dom ATTRIBUTE_UNUSED) {
     return ret;
 }
 
-static unsigned long testGetMaxMemory(virDomainPtr domain) {
+static unsigned long long testGetMaxMemory(virDomainPtr domain) {
     testConnPtr privconn = domain->conn->privateData;
     virDomainObjPtr privdom;
-    unsigned long ret = 0;
+    unsigned long long ret = 0;
 
     testDriverLock(privconn);
     privdom = virDomainFindByName(&privconn->domains,
@@ -4050,14 +4054,14 @@ testStorageFindPoolSources(virConnectPtr conn ATTRIBUTE_UNUSED,
         break;
 
     case VIR_STORAGE_POOL_NETFS:
-        if (!source || !source->host.name) {
+        if (!source || !source->hosts[0].name) {
             testError(VIR_ERR_INVALID_ARG,
                       "%s", "hostname must be specified for netfs sources");
             goto cleanup;
         }
 
         if (virAsprintf(&ret, defaultPoolSourcesNetFSXML,
-                        source->host.name) < 0)
+                        source->hosts[0].name) < 0)
             virReportOOMError();
         break;
 
@@ -5285,7 +5289,7 @@ testNodeDeviceCreateXML(virConnectPtr conn,
 
     testDriverLock(driver);
 
-    def = virNodeDeviceDefParseString(xmlDesc, CREATE_DEVICE);
+    def = virNodeDeviceDefParseString(xmlDesc, CREATE_DEVICE, NULL);
     if (def == NULL) {
         goto cleanup;
     }

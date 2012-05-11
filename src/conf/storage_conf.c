@@ -1,7 +1,7 @@
 /*
  * storage_conf.c: config handling for storage driver
  *
- * Copyright (C) 2006-2011 Red Hat, Inc.
+ * Copyright (C) 2006-2012 Red Hat, Inc.
  * Copyright (C) 2006-2008 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -276,7 +276,11 @@ virStoragePoolSourceClear(virStoragePoolSourcePtr source)
     if (!source)
         return;
 
-    VIR_FREE(source->host.name);
+    for (i = 0 ; i < source->nhost ; i++) {
+        VIR_FREE(source->hosts[i].name);
+    }
+    VIR_FREE(source->hosts);
+
     for (i = 0 ; i < source->ndevice ; i++) {
         VIR_FREE(source->devices[i].freeExtents);
         VIR_FREE(source->devices[i].path);
@@ -404,6 +408,7 @@ virStoragePoolDefParseSource(xmlXPathContextPtr ctxt,
     char *authType = NULL;
     int nsource, i;
     virStoragePoolOptionsPtr options;
+    char *name = NULL;
     char *port = NULL;
 
     relnode = ctxt->node;
@@ -431,18 +436,36 @@ virStoragePoolDefParseSource(xmlXPathContextPtr ctxt,
         VIR_FREE(format);
     }
 
-    source->host.name = virXPathString("string(./host/@name)", ctxt);
-    port = virXPathString("string(./host/@port)", ctxt);
-    if (port) {
-        if (virStrToLong_i(port, NULL, 10, &source->host.port) < 0) {
-            virStorageReportError(VIR_ERR_XML_ERROR,
-                                  _("Invalid port number: %s"),
-                                  port);
+    source->nhost = virXPathNodeSet("./host", ctxt, &nodeset);
+
+    if (source->nhost) {
+        if (VIR_ALLOC_N(source->hosts, source->nhost) < 0) {
+            virReportOOMError();
             goto cleanup;
+        }
+
+        for (i = 0 ; i < source->nhost ; i++) {
+            name = virXMLPropString(nodeset[i], "name");
+            if (name == NULL) {
+                virStorageReportError(VIR_ERR_XML_ERROR,
+                        "%s", _("missing storage pool host name"));
+                goto cleanup;
+            }
+            source->hosts[i].name = name;
+
+            port = virXMLPropString(nodeset[i], "port");
+            if (port) {
+                if (virStrToLong_i(port, NULL, 10, &source->hosts[i].port) < 0) {
+                    virStorageReportError(VIR_ERR_XML_ERROR,
+                                          _("Invalid port number: %s"),
+                                          port);
+                    goto cleanup;
+                }
+            }
         }
     }
 
-
+    VIR_FREE(nodeset);
     source->initiator.iqn = virXPathString("string(./initiator/iqn/@name)", ctxt);
 
     nsource = virXPathNodeSet("./device", ctxt, &nodeset);
@@ -570,14 +593,15 @@ virStorageDefParsePerms(xmlXPathContextPtr ctxt,
     if (!mode) {
         perms->mode = defaultmode;
     } else {
-        char *end = NULL;
-        perms->mode = strtol(mode, &end, 8);
-        if (*end || perms->mode < 0 || perms->mode > 0777) {
+        int tmp;
+
+        if (virStrToLong_i(mode, NULL, 8, &tmp) < 0 || (tmp & ~0777)) {
             VIR_FREE(mode);
             virStorageReportError(VIR_ERR_XML_ERROR,
                                   "%s", _("malformed octal mode"));
             goto error;
         }
+        perms->mode = tmp;
         VIR_FREE(mode);
     }
 
@@ -674,7 +698,7 @@ virStoragePoolDefParseXML(xmlXPathContextPtr ctxt) {
     }
 
     if (options->flags & VIR_STORAGE_POOL_SOURCE_HOST) {
-        if (!ret->source.host.name) {
+        if (!ret->source.nhost) {
             virStorageReportError(VIR_ERR_XML_ERROR,
                                   "%s",
                                   _("missing storage pool source host name"));
@@ -800,12 +824,13 @@ virStoragePoolSourceFormat(virBufferPtr buf,
     int i, j;
 
     virBufferAddLit(buf,"  <source>\n");
-    if ((options->flags & VIR_STORAGE_POOL_SOURCE_HOST) &&
-        src->host.name) {
-        virBufferAsprintf(buf, "    <host name='%s'", src->host.name);
-        if (src->host.port)
-            virBufferAsprintf(buf, " port='%d'", src->host.port);
-        virBufferAddLit(buf, "/>\n");
+    if ((options->flags & VIR_STORAGE_POOL_SOURCE_HOST) && src->nhost) {
+        for (i = 0; i < src->nhost; i++) {
+            virBufferAsprintf(buf, "    <host name='%s'", src->hosts[i].name);
+            if (src->hosts[i].port)
+                virBufferAsprintf(buf, " port='%d'", src->hosts[i].port);
+            virBufferAddLit(buf, "/>\n");
+        }
     }
 
     if ((options->flags & VIR_STORAGE_POOL_SOURCE_DEVICE) &&
@@ -897,11 +922,11 @@ virStoragePoolDefFormat(virStoragePoolDefPtr def) {
     virUUIDFormat(def->uuid, uuid);
     virBufferAsprintf(&buf,"  <uuid>%s</uuid>\n", uuid);
 
-    virBufferAsprintf(&buf,"  <capacity>%llu</capacity>\n",
+    virBufferAsprintf(&buf,"  <capacity unit='bytes'>%llu</capacity>\n",
                       def->capacity);
-    virBufferAsprintf(&buf,"  <allocation>%llu</allocation>\n",
+    virBufferAsprintf(&buf,"  <allocation unit='bytes'>%llu</allocation>\n",
                       def->allocation);
-    virBufferAsprintf(&buf,"  <available>%llu</available>\n",
+    virBufferAsprintf(&buf,"  <available unit='bytes'>%llu</available>\n",
                       def->available);
 
     if (virStoragePoolSourceFormat(&buf, options, &def->source) < 0)
@@ -915,10 +940,10 @@ virStoragePoolDefFormat(virStoragePoolDefPtr def) {
     virBufferAddLit(&buf,"    <permissions>\n");
     virBufferAsprintf(&buf,"      <mode>0%o</mode>\n",
                       def->target.perms.mode);
-    virBufferAsprintf(&buf,"      <owner>%d</owner>\n",
-                      def->target.perms.uid);
-    virBufferAsprintf(&buf,"      <group>%d</group>\n",
-                      def->target.perms.gid);
+    virBufferAsprintf(&buf,"      <owner>%u</owner>\n",
+                      (unsigned int) def->target.perms.uid);
+    virBufferAsprintf(&buf,"      <group>%u</group>\n",
+                      (unsigned int) def->target.perms.gid);
 
     if (def->target.perms.label)
         virBufferAsprintf(&buf,"      <label>%s</label>\n",
@@ -944,64 +969,17 @@ virStoragePoolDefFormat(virStoragePoolDefPtr def) {
 static int
 virStorageSize(const char *unit,
                const char *val,
-               unsigned long long *ret) {
-    unsigned long long mult;
-    char *end;
-
-    if (!unit) {
-        mult = 1;
-    } else {
-        switch (unit[0]) {
-        case 'k':
-        case 'K':
-            mult = 1024ull;
-            break;
-
-        case 'm':
-        case 'M':
-            mult = 1024ull * 1024ull;
-            break;
-
-        case 'g':
-        case 'G':
-            mult = 1024ull * 1024ull * 1024ull;
-            break;
-
-        case 't':
-        case 'T':
-            mult = 1024ull * 1024ull * 1024ull * 1024ull;
-            break;
-
-        case 'p':
-        case 'P':
-            mult = 1024ull * 1024ull * 1024ull * 1024ull * 1024ull;
-            break;
-
-        case 'e':
-        case 'E':
-            mult = 1024ull * 1024ull * 1024ull * 1024ull * 1024ull *
-                1024ull;
-            break;
-
-        default:
-            virStorageReportError(VIR_ERR_XML_ERROR,
-                                  _("unknown size units '%s'"), unit);
-            return -1;
-        }
-    }
-
-    if (virStrToLong_ull (val, &end, 10, ret) < 0) {
+               unsigned long long *ret)
+{
+    if (virStrToLong_ull(val, NULL, 10, ret) < 0) {
         virStorageReportError(VIR_ERR_XML_ERROR,
                               "%s", _("malformed capacity element"));
         return -1;
     }
-    if (*ret > (ULLONG_MAX / mult)) {
-        virStorageReportError(VIR_ERR_XML_ERROR,
-                              "%s", _("capacity element value too large"));
-            return -1;
-    }
-
-    *ret *= mult;
+    /* off_t is signed, so you cannot create a file larger than 2**63
+     * bytes in the first place.  */
+    if (virScaleInteger(ret, unit, 1, LLONG_MAX) < 0)
+        return -1;
 
     return 0;
 }
@@ -1199,10 +1177,10 @@ virStorageVolTargetDefFormat(virStorageVolOptionsPtr options,
     virBufferAddLit(buf,"    <permissions>\n");
     virBufferAsprintf(buf,"      <mode>0%o</mode>\n",
                       def->perms.mode);
-    virBufferAsprintf(buf,"      <owner>%d</owner>\n",
-                      def->perms.uid);
-    virBufferAsprintf(buf,"      <group>%d</group>\n",
-                      def->perms.gid);
+    virBufferAsprintf(buf,"      <owner>%u</owner>\n",
+                      (unsigned int) def->perms.uid);
+    virBufferAsprintf(buf,"      <group>%u</group>\n",
+                      (unsigned int) def->perms.gid);
 
 
     if (def->perms.label)
@@ -1262,9 +1240,9 @@ virStorageVolDefFormat(virStoragePoolDefPtr pool,
     }
     virBufferAddLit(&buf, "  </source>\n");
 
-    virBufferAsprintf(&buf,"  <capacity>%llu</capacity>\n",
+    virBufferAsprintf(&buf,"  <capacity unit='bytes'>%llu</capacity>\n",
                       def->capacity);
-    virBufferAsprintf(&buf,"  <allocation>%llu</allocation>\n",
+    virBufferAsprintf(&buf,"  <allocation unit='bytes'>%llu</allocation>\n",
                       def->allocation);
 
     if (virStorageVolTargetDefFormat(options, &buf,
@@ -1724,7 +1702,8 @@ int virStoragePoolSourceFindDuplicate(virStoragePoolObjListPtr pools,
             break;
         case VIR_STORAGE_POOL_NETFS:
             if ((STREQ(pool->def->source.dir, def->source.dir)) \
-                && (STREQ(pool->def->source.host.name, def->source.host.name)))
+                && (pool->def->source.nhost == 1 && def->source.nhost == 1) \
+                && (STREQ(pool->def->source.hosts[0].name, def->source.hosts[0].name)))
                 matchpool = pool;
             break;
         case VIR_STORAGE_POOL_SCSI:
@@ -1735,13 +1714,15 @@ int virStoragePoolSourceFindDuplicate(virStoragePoolObjListPtr pools,
         {
             matchpool = virStoragePoolSourceFindDuplicateDevices(pool, def);
             if (matchpool) {
-                if (STREQ(matchpool->def->source.host.name, def->source.host.name)) {
-                    if ((matchpool->def->source.initiator.iqn) && (def->source.initiator.iqn)) {
-                        if (STREQ(matchpool->def->source.initiator.iqn, def->source.initiator.iqn))
-                            break;
-                        matchpool = NULL;
+                if (matchpool->def->source.nhost == 1 && def->source.nhost == 1) {
+                    if (STREQ(matchpool->def->source.hosts[0].name, def->source.hosts[0].name)) {
+                        if ((matchpool->def->source.initiator.iqn) && (def->source.initiator.iqn)) {
+                            if (STREQ(matchpool->def->source.initiator.iqn, def->source.initiator.iqn))
+                                break;
+                            matchpool = NULL;
+                        }
+                        break;
                     }
-                    break;
                 }
                 matchpool = NULL;
             }
@@ -1756,6 +1737,9 @@ int virStoragePoolSourceFindDuplicate(virStoragePoolObjListPtr pools,
             break;
         }
         virStoragePoolObjUnlock(pool);
+
+        if (matchpool)
+            break;
     }
 
     if (matchpool) {

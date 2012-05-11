@@ -122,9 +122,13 @@ static virCommandPtr lxcContainerBuildInitCmd(virDomainDefPtr vmDef)
 
     cmd = virCommandNew(vmDef->os.init);
 
+    if (vmDef->os.initargv && vmDef->os.initargv[0])
+        virCommandAddArgSet(cmd, (const char **)vmDef->os.initargv);
+
     virCommandAddEnvString(cmd, "PATH=/bin:/sbin");
     virCommandAddEnvString(cmd, "TERM=linux");
     virCommandAddEnvString(cmd, "container=lxc-libvirt");
+    virCommandAddEnvPair(cmd, "container_uuid", uuidstr);
     virCommandAddEnvPair(cmd, "LIBVIRT_LXC_UUID", uuidstr);
     virCommandAddEnvPair(cmd, "LIBVIRT_LXC_NAME", vmDef->name);
     if (vmDef->os.cmdline)
@@ -260,7 +264,8 @@ int lxcContainerWaitForContinue(int control)
  *
  * Returns 0 on success or nonzero in case of error
  */
-static int lxcContainerRenameAndEnableInterfaces(unsigned int nveths,
+static int lxcContainerRenameAndEnableInterfaces(bool privNet,
+                                                 unsigned int nveths,
                                                  char **veths)
 {
     int rc = 0;
@@ -288,7 +293,7 @@ static int lxcContainerRenameAndEnableInterfaces(unsigned int nveths,
     }
 
     /* enable lo device only if there were other net devices */
-    if (veths)
+    if (veths || privNet)
         rc = virNetDevSetOnline("lo", true);
 
 error_out:
@@ -442,15 +447,15 @@ static int lxcContainerMountBasicFS(const char *srcprefix, bool pivotRoot)
         { false, "/proc/sys", "/proc/sys", NULL, NULL, MS_BIND|MS_REMOUNT|MS_RDONLY },
         { true, "/sys", "/sys", NULL, NULL, MS_BIND },
         { true, "/sys", "/sys", NULL, NULL, MS_BIND|MS_REMOUNT|MS_RDONLY },
-        { true, "/selinux", "/selinux", NULL, NULL, MS_BIND },
-        { true, "/selinux", "/selinux", NULL, NULL, MS_BIND|MS_REMOUNT|MS_RDONLY },
+#if HAVE_SELINUX
+        { true, SELINUX_MOUNT, SELINUX_MOUNT, NULL, NULL, MS_BIND },
+        { true, SELINUX_MOUNT, SELINUX_MOUNT, NULL, NULL, MS_BIND|MS_REMOUNT|MS_RDONLY },
+#endif
     };
     int i, rc = -1;
     char *opts = NULL;
 #if HAVE_SELINUX
     security_context_t con;
-#else
-    bool con = false;
 #endif
 
     VIR_DEBUG("Mounting basic filesystems %s pivotRoot=%d", NULLSTR(srcprefix), pivotRoot);
@@ -511,10 +516,17 @@ static int lxcContainerMountBasicFS(const char *srcprefix, bool pivotRoot)
          * tmpfs is limited to 64kb, since we only have device nodes in there
          * and don't want to DOS the entire OS RAM usage
          */
-        if (virAsprintf(&opts, "mode=755,size=65536%s%s%s",
-                        con ? ",context=\"" : "",
-                        con ? (const char *)con : "",
-                        con ? "\"" : "") < 0) {
+
+#if HAVE_SELINUX
+        if (con)
+            ignore_value(virAsprintf(&opts,
+                                     "mode=755,size=65536,context=\"%s\"",
+                                     (const char *)con));
+        else
+#endif
+            opts = strdup("mode=755,size=65536");
+
+        if (!opts) {
             virReportOOMError();
             goto cleanup;
         }
@@ -584,6 +596,15 @@ static int lxcContainerPopulateDevices(char **ttyPaths, size_t nttyPaths)
         { LXC_DEV_MAJ_MEMORY, LXC_DEV_MIN_RANDOM, 0666, "/dev/random" },
         { LXC_DEV_MAJ_MEMORY, LXC_DEV_MIN_URANDOM, 0666, "/dev/urandom" },
     };
+    const struct {
+        const char *src;
+        const char *dst;
+    } links[] = {
+        { "/proc/self/fd/0", "/dev/stdin" },
+        { "/proc/self/fd/1", "/dev/stdout" },
+        { "/proc/self/fd/2", "/dev/stderr" },
+        { "/proc/self/fd", "/dev/fd" },
+    };
 
     /* Populate /dev/ with a few important bits */
     for (i = 0 ; i < ARRAY_CARDINALITY(devs) ; i++) {
@@ -593,6 +614,15 @@ static int lxcContainerPopulateDevices(char **ttyPaths, size_t nttyPaths)
             virReportSystemError(errno,
                                  _("Failed to make device %s"),
                                  devs[i].path);
+            return -1;
+        }
+    }
+
+    for (i = 0 ; i < ARRAY_CARDINALITY(links) ; i++) {
+        if (symlink(links[i].src, links[i].dst) < 0) {
+            virReportSystemError(errno,
+                                 _("Failed to symlink device %s to %s"),
+                                 links[i].dst, links[i].src);
             return -1;
         }
     }
@@ -1319,7 +1349,9 @@ static int lxcContainerChild( void *data )
     VIR_DEBUG("Received container continue message");
 
     /* rename and enable interfaces */
-    if (lxcContainerRenameAndEnableInterfaces(argv->nveths,
+    if (lxcContainerRenameAndEnableInterfaces(!!(vmDef->features &
+                                                 (1 << VIR_DOMAIN_FEATURE_PRIVNET)),
+                                              argv->nveths,
                                               argv->veths) < 0) {
         goto cleanup;
     }
@@ -1334,13 +1366,13 @@ static int lxcContainerChild( void *data )
         goto cleanup;
     }
 
-    if (lxcContainerSetStdio(argv->monitor, ttyfd, argv->handshakefd) < 0) {
-        goto cleanup;
-    }
-
     VIR_DEBUG("Setting up security labeling");
     if (virSecurityManagerSetProcessLabel(argv->securityDriver, vmDef) < 0)
         goto cleanup;
+
+    if (lxcContainerSetStdio(argv->monitor, ttyfd, argv->handshakefd) < 0) {
+        goto cleanup;
+    }
 
     ret = 0;
 cleanup:
@@ -1434,7 +1466,8 @@ int lxcContainerStart(virDomainDefPtr def,
         cflags |= CLONE_NEWUSER;
     }
 
-    if (def->nets != NULL) {
+    if (def->nets != NULL ||
+        (def->features & (1 << VIR_DOMAIN_FEATURE_PRIVNET))) {
         VIR_DEBUG("Enable network namespaces");
         cflags |= CLONE_NEWNET;
     }
@@ -1484,7 +1517,7 @@ int lxcContainerAvailable(int features)
     if (cpid < 0) {
         char ebuf[1024] ATTRIBUTE_UNUSED;
         VIR_DEBUG("clone call returned %s, container support is not enabled",
-              virStrerror(errno, ebuf, sizeof ebuf));
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
         return -1;
     } else if (virPidWait(cpid, NULL) < 0) {
         return -1;

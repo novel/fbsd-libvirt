@@ -22,8 +22,9 @@ static int blankProblemElements(char *data)
 {
     if (virtTestClearLineRegex("<name>[[:alnum:]]+</name>", data) < 0 ||
         virtTestClearLineRegex("<uuid>([[:alnum:]]|-)+</uuid>", data) < 0 ||
-        virtTestClearLineRegex("<memory>[[:digit:]]+</memory>", data) < 0 ||
-        virtTestClearLineRegex("<currentMemory>[[:digit:]]+</currentMemory>", data) < 0 ||
+        virtTestClearLineRegex("<memory.*>[[:digit:]]+</memory>", data) < 0 ||
+        virtTestClearLineRegex("<currentMemory.*>[[:digit:]]+</currentMemory>",
+                               data) < 0 ||
         virtTestClearLineRegex("<readonly/>", data) < 0 ||
         virtTestClearLineRegex("<sharable/>", data) < 0)
         return -1;
@@ -241,7 +242,7 @@ mymain(void)
     VIR_FREE(driver.stateDir);
     virCapabilitiesFree(driver.caps);
 
-    return(ret==0 ? EXIT_SUCCESS : EXIT_FAILURE);
+    return ret==0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 VIRT_TEST_MAIN(mymain)
