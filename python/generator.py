@@ -337,7 +337,7 @@ foreign_encoding_args = (
 #
 #######################################################################
 
-# Class methods which are written by hand in libvir.c but the Python-level
+# Class methods which are written by hand in libvirt.c but the Python-level
 # code is still automatically generated (so they are not in skip_function()).
 skip_impl = (
     'virConnectGetVersion',
@@ -425,10 +425,15 @@ skip_impl = (
     'virDomainGetInterfaceParameters',
     'virDomainGetCPUStats',
     'virDomainGetDiskErrors',
+    'virConnectUnregisterCloseCallback',
+    'virConnectRegisterCloseCallback',
+    'virNodeGetMemoryParameters',
+    'virNodeSetMemoryParameters',
 )
 
 qemu_skip_impl = (
     'virDomainQemuMonitorCommand',
+    'virDomainQemuAgentCommand',
 )
 
 
@@ -446,6 +451,7 @@ skip_function = (
     'virConnectOpenAuth', # Python C code is manually written
     'virDefaultErrorFunc', # Python virErrorFuncHandler impl calls this from C
     'virDomainGetSecurityLabel', # Needs investigation...
+    'virDomainGetSecurityLabelList', # Needs investigation...
     'virNodeGetSecurityModel', # Needs investigation...
     'virConnectDomainEventRegister',   # overridden in virConnect.py
     'virConnectDomainEventDeregister', # overridden in virConnect.py
@@ -453,6 +459,16 @@ skip_function = (
     'virConnectDomainEventDeregisterAny', # overridden in virConnect.py
     'virSaveLastError', # We have our own python error wrapper
     'virFreeError', # Only needed if we use virSaveLastError
+    'virConnectListAllDomains', # overridden in virConnect.py
+    'virDomainListAllSnapshots', # overridden in virDomain.py
+    'virDomainSnapshotListAllChildren', # overridden in virDomainSnapshot.py
+    'virConnectListAllStoragePools', # overridden in virConnect.py
+    'virStoragePoolListAllVolumes', # overridden in virStoragePool.py
+    'virConnectListAllNetworks', # overridden in virConnect.py
+    'virConnectListAllInterfaces', # overridden in virConnect.py
+    'virConnectListAllNodeDevices', # overridden in virConnect.py
+    'virConnectListAllNWFilters', # overridden in virConnect.py
+    'virConnectListAllSecrets', # overridden in virConnect.py
 
     'virStreamRecvAll', # Pure python libvirt-override-virStream.py
     'virStreamSendAll', # Pure python libvirt-override-virStream.py

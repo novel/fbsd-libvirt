@@ -15,8 +15,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
+ * License along with this library.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
  */
@@ -30,6 +30,8 @@
 #include "pci.h"
 #include "hostusb.h"
 #include "virnetdev.h"
+
+#define VIR_FROM_THIS VIR_FROM_QEMU
 
 static pciDeviceList *
 qemuGetPciHostDeviceList(virDomainHostdevDefPtr *hostdevs, int nhostdevs)
@@ -257,7 +259,7 @@ cleanup:
 static int
 qemuDomainHostdevNetConfigVirtPortProfile(const char *linkdev, int vf,
                                           virNetDevVPortProfilePtr virtPort,
-                                          const unsigned char *macaddr,
+                                          const virMacAddrPtr macaddr,
                                           const unsigned char *uuid,
                                           int associate)
 {
@@ -271,10 +273,11 @@ qemuDomainHostdevNetConfigVirtPortProfile(const char *linkdev, int vf,
     case VIR_NETDEV_VPORT_PROFILE_OPENVSWITCH:
     case VIR_NETDEV_VPORT_PROFILE_8021QBG:
     case VIR_NETDEV_VPORT_PROFILE_LAST:
-        qemuReportError(VIR_ERR_CONFIG_UNSUPPORTED, _("virtualport type %s is "
-                        "currently not supported on interfaces of type "
-                        "hostdev"),
-                        virNetDevVPortTypeToString(virtPort->virtPortType));
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("virtualport type %s is "
+                         "currently not supported on interfaces of type "
+                         "hostdev"),
+                       virNetDevVPortTypeToString(virtPort->virtPortType));
         break;
 
     case VIR_NETDEV_VPORT_PROFILE_8021QBH:
@@ -298,6 +301,7 @@ qemuDomainHostdevNetConfigReplace(virDomainHostdevDefPtr hostdev,
                                   char *stateDir)
 {
     char *linkdev = NULL;
+    virNetDevVlanPtr vlan;
     virNetDevVPortProfilePtr virtPort;
     int ret = -1;
     int vf = -1;
@@ -307,28 +311,55 @@ qemuDomainHostdevNetConfigReplace(virDomainHostdevDefPtr hostdev,
 
     isvf = qemuDomainHostdevIsVirtualFunction(hostdev);
     if (isvf <= 0) {
-        qemuReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                        _("Interface type hostdev is currently supported on"
-                        " SR-IOV Virtual Functions only"));
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("Interface type hostdev is currently supported on"
+                         " SR-IOV Virtual Functions only"));
         return ret;
     }
 
     if (qemuDomainHostdevNetDevice(hostdev, &linkdev, &vf) < 0)
         return ret;
 
+    vlan = virDomainNetGetActualVlan(hostdev->parent.data.net);
     virtPort = virDomainNetGetActualVirtPortProfile(
                                  hostdev->parent.data.net);
-    if (virtPort)
+    if (virtPort) {
+        if (vlan) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                           _("direct setting of the vlan tag is not allowed "
+                             "for hostdev devices using %s mode"),
+                           virNetDevVPortTypeToString(virtPort->virtPortType));
+            goto cleanup;
+        }
         ret = qemuDomainHostdevNetConfigVirtPortProfile(linkdev, vf,
-                            virtPort, hostdev->parent.data.net->mac, uuid,
+                            virtPort, &hostdev->parent.data.net->mac, uuid,
                             port_profile_associate);
-    else
-        /* Set only mac */
-        ret = virNetDevReplaceNetConfig(linkdev, vf,
-                                        hostdev->parent.data.net->mac, vlanid,
-                                        stateDir);
-    VIR_FREE(linkdev);
+    } else {
+        /* Set only mac and vlan */
+        if (vlan) {
+            if (vlan->nTags != 1 || vlan->trunk) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                               _("vlan trunking is not supported "
+                                 "by SR-IOV network devices"));
+                goto cleanup;
+            }
+            if (vf == -1) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                               _("vlan can only be set for SR-IOV VFs, but "
+                                 "%s is not a VF"), linkdev);
+                goto cleanup;
+            }
+            vlanid = vlan->tag[0];
+        } else  if (vf >= 0) {
+            vlanid = 0; /* assure any current vlan tag is reset */
+        }
 
+        ret = virNetDevReplaceNetConfig(linkdev, vf,
+                                        &hostdev->parent.data.net->mac,
+                                        vlanid, stateDir);
+    }
+cleanup:
+    VIR_FREE(linkdev);
     return ret;
 }
 
@@ -345,9 +376,9 @@ qemuDomainHostdevNetConfigRestore(virDomainHostdevDefPtr hostdev,
 
     isvf = qemuDomainHostdevIsVirtualFunction(hostdev);
     if (isvf <= 0) {
-        qemuReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                        _("Interface type hostdev is currently supported on"
-                        " SR-IOV Virtual Functions only"));
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("Interface type hostdev is currently supported on"
+                         " SR-IOV Virtual Functions only"));
         return ret;
     }
 
@@ -358,7 +389,7 @@ qemuDomainHostdevNetConfigRestore(virDomainHostdevDefPtr hostdev,
                                  hostdev->parent.data.net);
     if (virtPort)
         ret = qemuDomainHostdevNetConfigVirtPortProfile(linkdev, vf, virtPort,
-                                          hostdev->parent.data.net->mac, NULL,
+                                          &hostdev->parent.data.net->mac, NULL,
                                           port_profile_associate);
     else
         ret = virNetDevRestoreNetConfig(linkdev, vf, stateDir);
@@ -399,9 +430,9 @@ int qemuPrepareHostdevPCIDevices(struct qemud_driver *driver,
         pciDevice *other;
 
         if (!pciDeviceIsAssignable(dev, !driver->relaxedACS)) {
-            qemuReportError(VIR_ERR_OPERATION_INVALID,
-                            _("PCI device %s is not assignable"),
-                            pciDeviceGetName(dev));
+            virReportError(VIR_ERR_OPERATION_INVALID,
+                           _("PCI device %s is not assignable"),
+                           pciDeviceGetName(dev));
             goto cleanup;
         }
         /* The device is in use by other active domain if
@@ -411,13 +442,13 @@ int qemuPrepareHostdevPCIDevices(struct qemud_driver *driver,
             const char *other_name = pciDeviceGetUsedBy(other);
 
             if (other_name)
-                qemuReportError(VIR_ERR_OPERATION_INVALID,
-                                _("PCI device %s is in use by domain %s"),
-                                pciDeviceGetName(dev), other_name);
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("PCI device %s is in use by domain %s"),
+                               pciDeviceGetName(dev), other_name);
             else
-                qemuReportError(VIR_ERR_OPERATION_INVALID,
-                                _("PCI device %s is already in use"),
-                                pciDeviceGetName(dev));
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("PCI device %s is already in use"),
+                               pciDeviceGetName(dev));
             goto cleanup;
         }
     }
@@ -567,7 +598,7 @@ qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
                              const char *name,
                              usbDeviceList *list)
 {
-    int i;
+    int i, j;
     unsigned int count;
     usbDevice *tmp;
 
@@ -579,14 +610,14 @@ qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
             const char *other_name = usbDeviceGetUsedBy(tmp);
 
             if (other_name)
-                qemuReportError(VIR_ERR_OPERATION_INVALID,
-                                _("USB device %s is in use by domain %s"),
-                                usbDeviceGetName(tmp), other_name);
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("USB device %s is in use by domain %s"),
+                               usbDeviceGetName(tmp), other_name);
             else
-                qemuReportError(VIR_ERR_OPERATION_INVALID,
-                                _("USB device %s is already in use"),
-                                usbDeviceGetName(tmp));
-            return -1;
+                virReportError(VIR_ERR_OPERATION_INVALID,
+                               _("USB device %s is already in use"),
+                               usbDeviceGetName(tmp));
+            goto error;
         }
 
         usbDeviceSetUsedBy(usb, name);
@@ -598,9 +629,16 @@ qemuPrepareHostdevUSBDevices(struct qemud_driver *driver,
          * perform rollback on failure.
          */
         if (usbDeviceListAdd(driver->activeUsbHostdevs, usb) < 0)
-            return -1;
+            goto error;
     }
     return 0;
+
+error:
+    for (j = 0; j < i; j++) {
+        tmp = usbDeviceListGet(list, i);
+        usbDeviceListSteal(driver->activeUsbHostdevs, tmp);
+    }
+    return -1;
 }
 
 static int
@@ -621,8 +659,7 @@ qemuPrepareHostUSBDevices(struct qemud_driver *driver,
     if (!(list = usbDeviceListNew()))
         goto cleanup;
 
-    /* Loop 1: build temporary list and validate no usb device
-     * is already taken
+    /* Loop 1: build temporary list
      */
     for (i = 0 ; i < nhostdevs ; i++) {
         virDomainHostdevDefPtr hostdev = hostdevs[i];
@@ -647,9 +684,9 @@ qemuPrepareHostUSBDevices(struct qemud_driver *driver,
                 goto cleanup;
 
             if (usbDeviceListCount(devs) > 1) {
-                qemuReportError(VIR_ERR_OPERATION_FAILED,
-                                _("multiple USB devices for %x:%x, "
-                                  "use <address> to specify one"), vendor, product);
+                virReportError(VIR_ERR_OPERATION_FAILED,
+                               _("multiple USB devices for %x:%x, "
+                                 "use <address> to specify one"), vendor, product);
                 usbDeviceListFree(devs);
                 goto cleanup;
             }
@@ -678,7 +715,7 @@ qemuPrepareHostUSBDevices(struct qemud_driver *driver,
      * wrong, perform rollback.
      */
     if (qemuPrepareHostdevUSBDevices(driver, def->name, list) < 0)
-        goto inactivedevs;
+        goto cleanup;
 
     /* Loop 2: Temporary list was successfully merged with
      * driver list, so steal all items to avoid freeing them
@@ -690,16 +727,6 @@ qemuPrepareHostUSBDevices(struct qemud_driver *driver,
     }
 
     ret = 0;
-    goto cleanup;
-
-inactivedevs:
-    /* Steal devices from driver->activeUsbHostdevs.
-     * We will free them later.
-     */
-    for (i = 0; i < usbDeviceListCount(list); i++) {
-        tmp = usbDeviceListGet(list, i);
-        usbDeviceListSteal(driver->activeUsbHostdevs, tmp);
-    }
 
 cleanup:
     usbDeviceListFree(list);

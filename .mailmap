@@ -28,8 +28,17 @@
 <supriyak@linux.vnet.ibm.com> <supriyak@in.ibm.com>
 <neil@aldur.co.uk> <neil@brightbox.co.uk>
 <stefanb@us.ibm.com> <stefanb@linux.vnet.ibm.com>
-<josh.durgin@dreamhost.com> <joshd@hq.newdream.net>
+<stefanb@us.ibm.com> <stefannb@linux.vnet.ibm.com>
+<josh.durgin@inktank.com> <joshd@hq.newdream.net>
+<josh.durgin@inktank.com> <josh.durgin@dreamhost.com>
+<gerd@egidy.de> <lists@egidy.de>
+<gerd@egidy.de> <gerd.von.egidy@intra2net.com>
+<benoar@dolka.fr> <benjamin.cama@telecom-bretagne.eu>
 
 # Name consolidation:
 # Preferred author spelling <preferred email>
 Alex Jia <ajia@redhat.com>
+Royce Lv <lvroyce@linux.vnet.ibm.com>
+Daniel J Walsh <dwalsh@redhat.com>
+Ján Tomko <jtomko@redhat.com>
+Gerd von Egidy <gerd@egidy.de>

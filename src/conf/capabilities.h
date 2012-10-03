@@ -15,8 +15,8 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
+ * License along with this library.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
  */
@@ -53,7 +53,6 @@ struct _virCapsGuestDomainInfo {
     char *loader;
     int nmachines;
     virCapsGuestMachinePtr *machines;
-    time_t emulator_mtime; /* do @machines need refreshing? */
 };
 
 typedef struct _virCapsGuestDomain virCapsGuestDomain;
@@ -93,6 +92,7 @@ struct _virCapsHostNUMACell {
 };
 
 typedef struct _virCapsHostSecModel virCapsHostSecModel;
+typedef virCapsHostSecModel *virCapsHostSecModelPtr;
 struct _virCapsHostSecModel {
     char *model;
     char *doi;
@@ -116,7 +116,10 @@ struct _virCapsHost {
     size_t nnumaCell;
     size_t nnumaCell_max;
     virCapsHostNUMACellPtr *numaCell;
-    virCapsHostSecModel secModel;
+
+    size_t nsecModels;
+    virCapsHostSecModelPtr secModels;
+
     virCPUDefPtr cpu;
     unsigned char host_uuid[VIR_UUID_BUFLEN];
 };
@@ -172,11 +175,11 @@ virCapabilitiesFreeNUMAInfo(virCapsPtr caps);
 
 extern void
 virCapabilitiesSetMacPrefix(virCapsPtr caps,
-                            unsigned char *prefix);
+                            const unsigned char prefix[VIR_MAC_PREFIX_BUFLEN]);
 
 extern void
 virCapabilitiesGenerateMac(virCapsPtr caps,
-                           unsigned char *mac);
+                           virMacAddrPtr mac);
 
 extern void
 virCapabilitiesSetEmulatorRequired(virCapsPtr caps);
