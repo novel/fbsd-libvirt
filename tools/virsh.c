@@ -565,9 +565,9 @@ vshEditWriteToTempFile(vshControl *ctl, const char *doc)
         vshError(ctl, "%s", _("out of memory"));
         return NULL;
     }
-    fd = mkstemps(ret, 4);
+    fd = mkostemps(ret, 4, O_CLOEXEC);
     if (fd == -1) {
-        vshError(ctl, _("mkstemps: failed to create temporary file: %s"),
+        vshError(ctl, _("mkostemps: failed to create temporary file: %s"),
                  virStrerror(errno, ebuf, sizeof(ebuf)));
         VIR_FREE(ret);
         return NULL;
@@ -2708,6 +2708,8 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
     vshPrint(ctl, " Interface");
 # if defined(WITH_NETCF)
     vshPrint(ctl, " netcf");
+# elif defined(HAVE_UDEV)
+    vshPrint(ctl, " udev");
 # endif
 #endif
 #ifdef WITH_NWFILTER
