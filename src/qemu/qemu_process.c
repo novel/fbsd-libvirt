@@ -27,7 +27,15 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+
+#if defined(__linux__)
 #include <linux/capability.h>
+#endif
+
+#if defined(__FreeBSD__)
+#include <sys/param.h>
+#include <sys/cpuset.h>
+#endif
 
 #include "qemu_process.h"
 #include "qemu_domain.h"
@@ -3697,11 +3705,13 @@ int qemuProcessStart(virConnectPtr conn,
     if (driver->clearEmulatorCapabilities)
         virCommandClearCaps(cmd);
 
+#if defined(__linux__)
     /* in case a certain disk is desirous of CAP_SYS_RAWIO, add this */
     for (i = 0; i < vm->def->ndisks; i++) {
         if (vm->def->disks[i]->rawio == 1)
             virCommandAllowCap(cmd, CAP_SYS_RAWIO);
     }
+#endif
 
     virCommandSetPreExecHook(cmd, qemuProcessHook, &hookData);
 
