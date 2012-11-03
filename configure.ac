@@ -146,6 +146,20 @@ VERSION_SCRIPT_FLAGS=-Wl,--version-script=
     VERSION_SCRIPT_FLAGS="-Wl,-M -Wl,"
 AC_MSG_RESULT([$VERSION_SCRIPT_FLAGS])
 
+uname=`uname`
+
+case $uname in
+  Linux*)
+    BUILD_LINUX=true
+    ;;
+  FreeBSD*)
+    BUILD_FREEBSD=true
+    ;;
+esac
+
+AM_CONDITIONAL(BUILD_LINUX, test x$BUILD_LINUX = xtrue)
+AM_CONDITIONAL(BUILD_FREEBSD, test x$BUILD_FREEBSD = xtrue)
+
 LIBVIRT_COMPILE_WARNINGS
 
 AC_MSG_CHECKING([for CPUID instruction])
@@ -950,11 +964,13 @@ fi
 dnl
 dnl check for kernel headers required by src/bridge.c
 dnl
-dnl if test "$with_qemu" = "yes" || test "$with_lxc" = "yes" ; then
-dnl   AC_CHECK_HEADERS([linux/param.h linux/sockios.h linux/if_bridge.h linux/if_tun.h],,
-dnl                    AC_MSG_ERROR([You must install kernel-headers in order to compile libvirt with QEMU or LXC support]))
-dnl fi
 
+if test "x$BUILD_LINUX" != x; then
+   if test "$with_qemu" = "yes" || test "$with_lxc" = "yes" ; then
+      AC_CHECK_HEADERS([linux/param.h linux/sockios.h linux/if_bridge.h linux/if_tun.h],,
+                    AC_MSG_ERROR([You must install kernel-headers in order to compile libvirt with QEMU or LXC support]))
+   fi
+fi
 
 dnl Need to test if pkg-config exists
 PKG_PROG_PKG_CONFIG
