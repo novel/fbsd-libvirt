@@ -1,0 +1,54 @@
+Configuring:
+
+ ./configure --with-qemu --disable-werror --with-qemu-group=wheel --without-polkit
+
+Basic Testing:
+
+ Create a domain file:
+
+<domain type='qemu'>
+  <name>qemu</name>
+  <uuid>00000000-0000-0000-0000-000000000000</uuid>
+  <memory>219136</memory>
+  <currentMemory>219136</currentMemory>
+  <vcpu>1</vcpu>
+  <os>
+    <type arch='i686' machine='pc'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+  </features>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <emulator>/usr/local/bin/qemu</emulator>
+    <disk type='block' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source dev='/path/to/freebsd.img'/>
+      <target dev='hda' bus='ide'/>
+    </disk>
+    <!--interface type='bridge'>
+      <mac address='52:54:00:00:01:89'/>
+      <source bridge='br0'/>
+    </interface-->
+    <input type='tablet' bus='usb'/> 
+    <input type='mouse' bus='ps2'/>
+    <graphics type='vnc' port='-1' listen='127.0.0.1'/>
+  </devices>
+</domain>
+
+start a virsh: virsh -c qemu:///system
+
+inside virsh type:
+
+define /path/to/domfile.xml
+start vm1
+
+Now you can log in using vnc:
+
+vncview :0
+
+To stop the VM, use 'shutdown vm1' inside virsh.
