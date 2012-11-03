@@ -1091,12 +1091,6 @@ int virNetSocketGetPort(virNetSocketPtr sock)
 }
 
 #if defined(SO_PEERCRED)
-#define QEMU_PEERCRED	SO_PEERCRED
-#elif defined(LOCAL_PEERCRED)
-#define QEMU_PEERCRED	LOCAL_PEERCRED
-#endif
-
-#ifdef SO_PEERCRED
 int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
                                 uid_t *uid,
                                 gid_t *gid,
@@ -1106,7 +1100,7 @@ int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
     socklen_t cr_len = sizeof(cr);
     virMutexLock(&sock->lock);
 
-    if (getsockopt(sock->fd, SOL_SOCKET, QEMU_PEERCRED, &cr, &cr_len) < 0) {
+    if (getsockopt(sock->fd, SOL_SOCKET, SO_PEERCRED, &cr, &cr_len) < 0) {
         virReportSystemError(errno, "%s",
                              _("Failed to get client socket identity"));
         virMutexUnlock(&sock->lock);
@@ -1132,14 +1126,14 @@ int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
     socklen_t cr_len = sizeof(cr);
     virMutexLock(&sock->lock);
 
-    if (getsockopt(sock->fd, SOL_SOCKET, QEMU_PEERCRED, &cr, &cr_len) < 0) {
+    if (getsockopt(sock->fd, SOL_SOCKET, LOCAL_PEERCRED, &cr, &cr_len) < 0) {
         virReportSystemError(errno, "%s",
                              _("Failed to get client socket identity"));
         virMutexUnlock(&sock->lock);
         return -1;
     }
 
-//    *pid = cr.pid;
+    /* *pid = cr.pid; */
     *pid = 0;
     *uid = cr.cr_uid;
     *gid = cr.cr_gid;
