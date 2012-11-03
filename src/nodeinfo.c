@@ -845,6 +845,56 @@ cleanup:
     VIR_FORCE_FCLOSE(cpuinfo);
     return ret;
     }
+#elif defined(__FreeBSD__)
+    {
+    #include <sys/types.h>
+    #include <sys/sysctl.h>
+
+    nodeinfo->nodes = 1;
+    nodeinfo->sockets = 1;
+    nodeinfo->cores = 1;
+    nodeinfo->threads = 1;
+
+    int ncpu_mib[2] = { CTL_HW, HW_NCPU };
+    unsigned long ncpu;
+    size_t ncpu_len = sizeof(ncpu);
+
+    if (sysctl(ncpu_mib, 2, &ncpu, &ncpu_len, NULL, 0) == -1) {
+        virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                    _("cannot obtain cpu count"));
+        return -1;
+    }
+
+    nodeinfo->cpus = ncpu;
+
+    unsigned long cpu_freq;
+    size_t cpu_freq_len = sizeof(cpu_freq);
+
+    if (sysctlbyname("dev.cpu.0.freq", &cpu_freq, &cpu_freq_len, NULL, 0) < 0) {
+        virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                    _("cannot obtain cpu freq"));
+        return -1;
+    }
+
+    nodeinfo->mhz = cpu_freq;
+
+    /* get memory information */
+    int mib[2] = { CTL_HW, HW_PHYSMEM };
+    unsigned long physmem;
+    size_t len = sizeof(physmem);
+
+    if (sysctl(mib, 2, &physmem, &len, NULL, 0) == -1) {
+        virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                    _("cannot obtain memory count"));
+        return -1;
+    }
+
+    nodeinfo->memory = (unsigned long)(physmem / 1024);
+
+    VIR_DEBUG("memory: %lu", nodeinfo->memory);
+
+    return 0;
+    }
 #else
     /* XXX Solaris will need an impl later if they port QEMU driver */
     virReportError(VIR_ERR_NO_SUPPORT, "%s",
