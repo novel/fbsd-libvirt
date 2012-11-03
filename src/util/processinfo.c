@@ -167,6 +167,22 @@ realloc:
     return 0;
 }
 
+#elif defined(__FreeBSD__)
+
+int virProcessInfoSetAffinity(pid_t pid, virBitmapPtr map)
+{
+  //  VIR_WARN("%s: map = %s", __func__, virBitmapString(map));
+
+    return 0;
+}
+
+int virProcessInfoGetAffinity(pid_t pid, virBitmapPtr *map, int maxcpu)
+{
+//    VIR_WARN("%s: map = %s", __func__, virBitmapString(map));
+
+    return 0;
+}
+
 #else /* HAVE_SCHED_GETAFFINITY */
 
 int virProcessInfoSetAffinity(pid_t pid ATTRIBUTE_UNUSED,
@@ -178,8 +194,8 @@ int virProcessInfoSetAffinity(pid_t pid ATTRIBUTE_UNUSED,
 }
 
 int virProcessInfoGetAffinity(pid_t pid ATTRIBUTE_UNUSED,
-                              virBitmapPtr *map ATTRIBUTE_UNUSED,
-                              int maxcpu ATTRIBUTE_UNUSED)
+                               virBitmapPtr *map ATTRIBUTE_UNUSED,
+                               int maxcpu ATTRIBUTE_UNUSED)
 {
     virReportSystemError(ENOSYS, "%s",
                          _("Process CPU affinity is not supported on this platform"));
