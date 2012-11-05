@@ -193,8 +193,9 @@ int virNetDevTapCreate(char **ifname,
         goto cleanup;
     }
 #if 0
+    XXX
     if (tapfd)
-        *tapfd = fd;
+        *tapfd = open(;
     else
         VIR_FORCE_CLOSE(fd);
 #endif
