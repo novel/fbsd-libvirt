@@ -277,6 +277,8 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
                                          virDomainNetGetActualVirtPortProfile(net),
                                          virDomainNetGetActualVlan(net),
                                          tap_create_flags);
+    VIR_WARN("%s, added ifname %s to bridge %s", __func__,
+                  net->ifname, brname);
     virDomainAuditNetDevice(def, net, "/dev/net/tun", tapfd >= 0);
     if (err < 0) {
         if (template_ifname)

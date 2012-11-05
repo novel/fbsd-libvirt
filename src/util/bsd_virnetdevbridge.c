@@ -28,6 +28,7 @@
 #include "virfile.h"
 #include "memory.h"
 #include "intprops.h"
+#include "logging.h"
 
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -236,12 +237,13 @@ cleanup:
 #elif defined __FreeBSD__
 int virNetDevBridgeCreate(const char *brname)
 {
-	const char *ifcfgfmt = "/sbin/ifconfig %s create";
-	char cmdbuffer[64];
-	int ret = -1;
+    const char *ifcfgfmt = "/sbin/ifconfig %s create";
+    char cmdbuffer[64];
+    int ret = -1;
 
-	sprintf (cmdbuffer, ifcfgfmt, brname);
-	ret = system (cmdbuffer);
+    VIR_WARN("Creating bridge %s", brname);
+    sprintf (cmdbuffer, ifcfgfmt, brname);
+    ret = system (cmdbuffer);
     return ret;
 }
 #else
@@ -285,12 +287,13 @@ cleanup:
 #elif defined __FreeBSD__
 int virNetDevBridgeDelete(const char *brname)
 {
-	const char *ifcfgfmt = "/sbin/ifconfig %s destroy";
-	char cmdbuffer[64];
-	int ret = -1;
+    const char *ifcfgfmt = "/sbin/ifconfig %s destroy";
+    char cmdbuffer[64];
+    int ret = -1;
 
-	sprintf (cmdbuffer, ifcfgfmt, brname);
-	ret = system (cmdbuffer);
+    VIR_WARN("Deleting bridge %s", brname);
+    sprintf (cmdbuffer, ifcfgfmt, brname);
+    ret = system (cmdbuffer);
     return ret;
 }
 #else
@@ -319,6 +322,7 @@ int virNetDevBridgeAddPort(const char *brname,
     struct ifdrv ifd;
     struct ifbreq req;
 
+    VIR_WARN("Adding iface %s to bridge %s", ifname, brname);
     memset(&req, 0, sizeof(req));
     memset(&ifd, 0, sizeof(ifd));
     strlcpy(req.ifbr_ifsname, ifname, sizeof(req.ifbr_ifsname));
