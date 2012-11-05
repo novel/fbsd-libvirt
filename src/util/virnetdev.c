@@ -32,14 +32,20 @@
 #include "logging.h"
 
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <net/if.h>
 #include <fcntl.h>
+
 
 #ifdef __linux__
 # include <linux/sockios.h>
 # include <linux/if_vlan.h>
 #elif !defined(AF_PACKET)
 # undef HAVE_STRUCT_IFREQ
+#endif
+
+#ifdef __FreeBSD__
+# include <sys/sockio.h>
 #endif
 
 #define VIR_FROM_THIS VIR_FROM_NONE
@@ -172,6 +178,51 @@ int virNetDevSetMAC(const char *ifname,
 cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
+}
+#elif defined(__FreeBSD__)
+#include <net/if_dl.h>
+
+int virNetDevSetMAC(const char *ifname,
+                    const virMacAddrPtr macaddr)
+{
+        struct ifreq ifr;
+        struct sockaddr_dl sdl;
+        uint8_t mac[19];
+        char *macstr;//[VIR_MAC_STRING_BUFLEN];
+        int s;
+        int ret = -1;
+
+        macstr = malloc(sizeof(char) * VIR_MAC_STRING_BUFLEN);
+        virMacAddrFormat(&macaddr, macstr);
+
+        VIR_WARN("%s: setting mac addr on %s to %s",
+               __func__, ifname, macstr);
+
+        strncpy(ifr.ifr_name, ifname, IFNAMSIZ);
+        memset(mac, 0, sizeof(mac));
+        mac[0] = ':';
+        strncpy(mac + 1, macstr, strlen(macstr));
+        sdl.sdl_len = sizeof(sdl);
+        link_addr(mac, &sdl);
+
+        bcopy(sdl.sdl_data, ifr.ifr_addr.sa_data, 6);
+        ifr.ifr_addr.sa_len = 6;
+
+        s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+
+        if (ioctl(s, SIOCSIFLLADDR, &ifr) < 0) {
+            virReportSystemError(errno,
+                                 _("Cannot set interface MAC on '%s'"),
+                                ifname);
+            goto cleanup;
+        }
+
+        ret = 0;
+cleanup:
+        free(macstr);
+        close(s);
+
+        return ret;
 }
 #else
 int virNetDevSetMAC(const char *ifname,
@@ -350,6 +401,36 @@ cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
 }
+#elif defined(__FreeBSD__)
+int virNetDevGetMTU(const char *ifname)
+{
+    int s;
+    int ret;
+    struct ifreq ifr;
+
+    if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        //virReportSystemError(errno,
+          //             _("Cannot create socket"));
+        return -1;
+    }
+
+    ifr.ifr_addr.sa_family = AF_INET;
+    strcpy(ifr.ifr_name, ifname);
+    if (ioctl(s, SIOCGIFMTU, (caddr_t)&ifr) < 0) {
+        virReportSystemError(errno,
+                             _("Cannot get interface MTU on '%s'"),
+                            ifname);
+        goto cleanup;
+    }
+
+    ret = ifr.ifr_mtu;
+
+    ret = 0;
+
+cleanup:
+    close(s);
+    return ret;
+}
 #else
 int virNetDevGetMTU(const char *ifname)
 {
@@ -394,6 +475,36 @@ int virNetDevSetMTU(const char *ifname, int mtu)
 
 cleanup:
     VIR_FORCE_CLOSE(fd);
+    return ret;
+}
+#elif defined(__FreeBSD__)
+int virNetDevSetMTU(const char *ifname, int mtu)
+{
+    int s;
+    int ret;
+    struct ifreq ifr;
+
+    if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+//        virReportSystemError(errno,
+  //                           _("Cannot create socket"));
+        return -1;
+    }
+
+    ifr.ifr_addr.sa_family = AF_INET;
+    strcpy(ifr.ifr_name, ifname);
+    ifr.ifr_mtu = mtu;
+
+    if (ioctl(s, SIOCGIFMTU, (caddr_t)&ifr) < 0) {
+        virReportSystemError(errno,
+                             _("Cannot get interface MTU on '%s'"),
+                            ifname);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    close(s);
     return ret;
 }
 #else
@@ -509,7 +620,7 @@ int virNetDevSetName(const char* ifname, const char *newifname)
 #endif
 
 
-#if defined(SIOCSIFFLAGS) && defined(HAVE_STRUCT_IFREQ)
+#if (defined(SIOCSIFFLAGS) && defined(HAVE_STRUCT_IFREQ))
 /**
  * virNetDevSetOnline:
  * @ifname: the interface name
@@ -558,6 +669,50 @@ cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
 }
+#elif defined(__FreeBSD__)
+int virNetDevSetOnline(const char *ifname,
+                       bool online)
+{
+    int s;
+    int ret = -1;
+    int ifflags;
+
+    VIR_WARN("%s, ifname = %s", __func__, ifname);
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
+        virReportSystemError(errno,
+                             _("Cannot get interface flags on '%s'"),
+                             ifname);
+        goto cleanup;
+    }
+
+    if (online)
+        ifflags = ifr.ifr_flags | IFF_UP;
+    else
+        ifflags = ifr.ifr_flags & ~IFF_UP;
+
+    if (ifr.ifr_flags != ifflags) {
+        ifr.ifr_flags = ifflags;
+        if (ioctl(s, SIOCSIFFLAGS, &ifr) < 0) {
+            virReportSystemError(errno,
+                                 _("Cannot set interface flags on '%s'"),
+                                 ifname);
+            goto cleanup;
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    close(s);
+    return ret;
+}
 #else
 int virNetDevSetOnline(const char *ifname,
                        bool online ATTRIBUTE_UNUSED)
@@ -603,6 +758,36 @@ int virNetDevIsOnline(const char *ifname,
 cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
+}
+#elif defined(__FreeBSD__)
+int virNetDevIsOnline(const char *ifname,
+                      bool *online)
+{
+    int s;
+    int ret = -1;
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+    VIR_WARN("%s, ifname = %s", __func__, ifname);
+
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
+        virReportSystemError(errno,
+                             _("Cannot get interface flags on '%s'"),
+                             ifname);
+        goto cleanup;
+    }
+
+    *online = (ifr.ifr_flags & IFF_UP) ? true : false;
+    ret = 0;
+
+cleanup:
+    close(s);
+    return ret;
+
 }
 #else
 int virNetDevIsOnline(const char *ifname,

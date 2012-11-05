@@ -270,6 +270,8 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
         tap_create_flags |= VIR_NETDEV_TAP_CREATE_VNET_HDR;
     }
 
+    VIR_WARN("%s, brname = %s, ifname = %s, mac = %s",
+                 __func__, brname, net->ifname, &net->mac);
     err = virNetDevTapCreateInBridgePort(brname, &net->ifname, &net->mac,
                                          def->uuid, &tapfd,
                                          virDomainNetGetActualVirtPortProfile(net),

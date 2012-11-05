@@ -51,6 +51,14 @@ augeastest_DATA =
 
 # These files are not related to driver APIs. Simply generic
 # helper APIs for various purposes
+if BUILD_FREEBSD
+NETDEV = util/bsd_virnetdevtap.h util/bsd_virnetdevtap.c \
+	 util/bsd_virnetdevbridge.h util/bsd_virnetdevbridge.c
+else
+NETDEV = util/virnetdevtap.h util/virnetdevtap.c \
+	util/virnetdevbridge.h util/virnetdevbridge.c
+endif
+
 UTIL_SOURCES =							\
 		util/bitmap.c util/bitmap.h			\
 		util/buf.c util/buf.h				\
@@ -101,10 +109,8 @@ UTIL_SOURCES =							\
 		util/virmacaddr.h util/virmacaddr.c		\
 		util/virnetdev.h util/virnetdev.c		\
 		util/virnetdevbandwidth.h util/virnetdevbandwidth.c \
-		util/virnetdevbridge.h util/virnetdevbridge.c	\
 		util/virnetdevmacvlan.c util/virnetdevmacvlan.h	\
 		util/virnetdevopenvswitch.h util/virnetdevopenvswitch.c \
-		util/virnetdevtap.h util/virnetdevtap.c		\
 		util/virnetdevveth.h util/virnetdevveth.c \
 		util/virnetdevvlan.h util/virnetdevvlan.c \
 		util/virnetdevvportprofile.h util/virnetdevvportprofile.c \
@@ -112,7 +118,8 @@ UTIL_SOURCES =							\
 		util/virrandom.h util/virrandom.c		\
 		util/virsocketaddr.h util/virsocketaddr.c \
 		util/virtime.h util/virtime.c \
-		util/viruri.h util/viruri.c
+		util/viruri.h util/viruri.c \
+		$(NETDEV)
 
 EXTRA_DIST += $(srcdir)/util/virkeymaps.h $(srcdir)/util/keymaps.csv \
 		$(srcdir)/util/virkeycode-mapgen.py
@@ -553,8 +560,13 @@ PARALLELS_DRIVER_SOURCES =					\
 		parallels/parallels_utils.h			\
 		parallels/parallels_storage.c
 
+if BUILD_FREEBSD
+NETWORK_DRIVER_SOURCES =					\
+		network/bsd_bridge_driver.h network/bsd_bridge_driver.c
+else
 NETWORK_DRIVER_SOURCES =					\
 		network/bridge_driver.h network/bridge_driver.c
+endif
 
 INTERFACE_DRIVER_SOURCES =
 
