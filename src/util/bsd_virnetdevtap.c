@@ -139,25 +139,8 @@ int virNetDevTapCreate(char **ifname,
 
     VIR_WARN("%s: ifname = %s", __func__, NULLSTR(*ifname));
 
-#if 0
-    if ((fd = open("/dev/net/tun", O_RDWR)) < 0) {
-        virReportSystemError(errno, "%s",
-                             _("Unable to open /dev/net/tun, is tun module loaded?"));
-        return -1;
-    }
-#endif
 
     memset(&ifr, 0, sizeof(ifr));
-    //ifr.ifr_name = strdup("tap");
-    //ifr.ifr_flags = IFF_TAP|IFF_NO_PI;
-
-#if 0
-# ifdef IFF_VNET_HDR
-    if ((flags &  VIR_NETDEV_TAP_CREATE_VNET_HDR) &&
-        virNetDevProbeVnetHdr(fd))
-        ifr.ifr_flags |= IFF_VNET_HDR;
-# endif
-#endif
 
     if (virStrcpyStatic(ifr.ifr_name, "tap") == NULL) {
         virReportSystemError(ERANGE,
@@ -192,17 +175,25 @@ int virNetDevTapCreate(char **ifname,
         virReportOOMError();
         goto cleanup;
     }
-#if 0
-    XXX
-    if (tapfd)
-        *tapfd = open(;
-    else
-        VIR_FORCE_CLOSE(fd);
-#endif
+
+    if (tapfd) {
+        char *dev_prefix = "/dev/";
+        char *dev_path;
+        int dev_path_len = strlen(dev_prefix) +  strlen(*ifname) + 1;
+
+        dev_path = malloc(dev_path_len * sizeof(char));
+        snprintf(dev_path, dev_path_len, "%s%s", dev_prefix, *ifname);
+
+        *tapfd = open(dev_path, O_RDWR);
+    }
+
     ret = 0;
 cleanup:
     if (ret < 0)
         VIR_FORCE_CLOSE(s);
+
+    if (dev_path)
+        free(dev_path);
 
     return ret;
 }
