@@ -546,6 +546,10 @@ AC_DEFINE_UNQUOTED([IP6TABLES_PATH], "$IP6TABLES_PATH", [path to ip6tables binar
 AC_PATH_PROG([EBTABLES_PATH], [ebtables], /sbin/ebtables, [/usr/sbin:$PATH])
 AC_DEFINE_UNQUOTED([EBTABLES_PATH], "$EBTABLES_PATH", [path to ebtables binary])
 
+if test x$BUILD_FREEBSD = xtrue; then
+    AC_PATH_PROG([IFCONFIG_PATH], [ifconfig], /sbin/ifconfig, [/usr/sbin:$PATH])
+    AC_DEFINE_UNQUOTED([IFCONFIG_PATH], "$IFCONFIG_PATH", [path to ifconfig binary])
+fi
 
 dnl
 dnl Checks for the OpenVZ driver

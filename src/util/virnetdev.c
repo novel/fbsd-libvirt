@@ -935,12 +935,20 @@ int virNetDevSetIPv4Address(const char *ifname,
          !(bcaststr = virSocketAddrFormat(&broadcast)))) {
         goto cleanup;
     }
+#if defined(__FreeBSD__)
+    cmd = virCommandNew(IFCONFIG_PATH);
+    virCommandAddArgList(cmd, ifname, "inet", NULL);
+    virCommandAddArgFormat(cmd, "%s/%u", addrstr, prefix);
+    if (bcaststr)
+        virCommandAddArgList(cmd, "broadcast", bcaststr, NULL);
+#else
     cmd = virCommandNew(IP_PATH);
     virCommandAddArgList(cmd, "addr", "add", NULL);
     virCommandAddArgFormat(cmd, "%s/%u", addrstr, prefix);
     if (bcaststr)
         virCommandAddArgList(cmd, "broadcast", bcaststr, NULL);
     virCommandAddArgList(cmd, "dev", ifname, NULL);
+#endif
 
     if (virCommandRun(cmd, NULL) < 0)
         goto cleanup;
@@ -974,10 +982,17 @@ int virNetDevClearIPv4Address(const char *ifname,
 
     if (!(addrstr = virSocketAddrFormat(addr)))
         goto cleanup;
+#if defined(__FreeBSD__)
+    cmd = virCommandNew(IFCONFIG_PATH);
+    virCommandAddArgList(cmd, ifname, "inet", NULL);
+    virCommandAddArgFormat(cmd, "%s/%u", addrstr, prefix);
+    virCommandAddArgList(cmd, "-alias", NULL);
+#else
     cmd = virCommandNew(IP_PATH);
     virCommandAddArgList(cmd, "addr", "del", NULL);
     virCommandAddArgFormat(cmd, "%s/%u", addrstr, prefix);
     virCommandAddArgList(cmd, "dev", ifname, NULL);
+#endif
 
     if (virCommandRun(cmd, NULL) < 0)
         goto cleanup;

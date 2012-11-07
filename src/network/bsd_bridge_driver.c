@@ -45,6 +45,7 @@
 #include <sys/socket.h>
 #endif
 #include <net/if.h>
+#include <sys/sysctl.h>
 
 #include "virterror_internal.h"
 #include "datatypes.h"
@@ -1869,11 +1870,16 @@ networkReloadIptablesRules(struct network_driver *driver)
 static int
 networkEnableIpForwarding(bool enableIPv4, bool enableIPv6)
 {
+
     int ret = 0;
+    const char *v4_forwarding = "net.inet.ip.forwarding";
+    const char *v6_forwarding = "net.inet6.ip6.forwarding";
+    int enabled = 1;
+
     if (enableIPv4)
-        ret = virFileWriteStr("/proc/sys/net/ipv4/ip_forward", "1\n", 0);
+        ret = sysctlbyname(v4_forwarding, NULL, NULL, &enabled, sizeof enabled);
     if (enableIPv6 && ret == 0)
-        ret = virFileWriteStr("/proc/sys/net/ipv6/conf/all/forwarding", "1\n", 0);
+        ret = sysctlbyname(v6_forwarding, NULL, NULL, &enabled, sizeof enabled);
     return ret;
 }
 
@@ -2133,10 +2139,13 @@ networkStartNetworkVirtual(struct network_driver *driver,
     if (networkSetIPv6Sysctls(network) < 0)
         goto err1;
 
+
     /* Add "once per network" rules */
+    /* TODO: implement FreeBSD firewalling */
+#if 0
     if (networkAddIptablesRules(driver, network) < 0)
         goto err1;
-
+#endif
     for (ii = 0;
          (ipdef = virNetworkDefGetIpByIndex(network->def, AF_UNSPEC, ii));
          ii++) {
