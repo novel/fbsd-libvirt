@@ -125,6 +125,35 @@ cleanup:
     VIR_FORCE_CLOSE(fd);
     return ret;
 }
+#elif defined(__FreeBSD__)
+int virNetDevExists(const char *ifname)
+{
+    int s;
+    int ret = -1;
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+    VIR_WARN("%s, ifname = %s", __func__, ifname);
+
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+
+    if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
+        if (errno == ENXIO)
+            ret = 0;
+        else
+            virReportSystemError(errno,
+                                 _("Unable to check interface flags for %s"), ifname);
+        goto cleanup;
+    }
+
+    ret = 1;
+
+cleanup:
+    close(s);
+    return ret;
+}
 #else
 int virNetDevExists(const char *ifname)
 {

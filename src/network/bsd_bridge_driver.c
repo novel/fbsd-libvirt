@@ -2278,7 +2278,8 @@ static int networkShutdownNetworkVirtual(struct network_driver *driver,
 
     ignore_value(virNetDevSetOnline(network->def->bridge, 0));
 
-    networkRemoveIptablesRules(driver, network);
+    /* TODO */
+    /* networkRemoveIptablesRules(driver, network);*/
 
     ignore_value(virNetDevBridgeDelete(network->def->bridge));
 
