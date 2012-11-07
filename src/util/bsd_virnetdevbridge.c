@@ -517,13 +517,40 @@ cleanup:
 }
 #else /* !__linux__ */
 int virNetDevBridgeSetSTPDelay(const char *brname,
-                               int delay ATTRIBUTE_UNUSED)
+                               int delay)
 {
-    virReportSystemError(ENOSYS,
-                         _("Unable to set STP delay on %s on this platform"),
-                         brname);
-    return -1;
+    int s;
+    struct ifdrv ifd;
+    struct ifbrparam param;
+    int ret = -1;
+
+    VIR_WARN("brname = %s, delay = %d", brname, delay);
+
+    delay = delay < 4 ? 4 : delay;
+
+    memset(&ifd, 0, sizeof(ifd));
+    strlcpy(ifd.ifd_name, brname, sizeof(ifd.ifd_name));
+
+    param.ifbrp_fwddelay = ((u_long)delay) & 0xff;
+
+    ifd.ifd_cmd = BRDGSFD;
+    ifd.ifd_len = sizeof(param);
+    ifd.ifd_data = &param;
+
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+
+    if (ioctl(s, SIOCSDRVSPEC, &ifd) < 0) {
+        virReportSystemError(errno,
+                             _("Unable to set STP delay on %s"), brname);
+         goto cleanup;
+    }
+
+    ret = 0;
+cleanup:
+    close(s);
+    return ret;
 }
+
 int virNetDevBridgeGetSTPDelay(const char *brname,
                                int *delay ATTRIBUTE_UNUSED)
 {
@@ -533,14 +560,18 @@ int virNetDevBridgeGetSTPDelay(const char *brname,
     return -1;
 }
 
-int virNetDevBridgeSetSTP(const char *brname,
-                          bool enable ATTRIBUTE_UNUSED)
+int virNetDevBridgeSetSTP(const char *brname, bool enable)
 
 {
-    virReportSystemError(ENOSYS,
-                         _("Unable to set STP on %s on this platform"),
-                         brname);
-    return -1;
+    /*XXX
+     * It's not clear so far to how set STP flag on the bridge
+     * as Linux sets STP over the bridge and FreeBSD allows
+     * setting STP flag only per each device in the bridge.
+     * At the time when this call happens, there are no
+     * interfaces in the bridge yet. */
+    VIR_WARN("Setting STP on %s to %d", brname, enable ? 1 : 0);
+
+    return 0;
 }
 int virNetDevBridgeGetSTP(const char *brname,
                           bool *enable ATTRIBUTE_UNUSED)
