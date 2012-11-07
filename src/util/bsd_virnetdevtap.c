@@ -185,15 +185,15 @@ int virNetDevTapCreate(char **ifname,
         snprintf(dev_path, dev_path_len, "%s%s", dev_prefix, *ifname);
 
         *tapfd = open(dev_path, O_RDWR);
+
+        if (dev_path)
+            free(dev_path);
     }
 
     ret = 0;
 cleanup:
     if (ret < 0)
         VIR_FORCE_CLOSE(s);
-
-    if (dev_path)
-        free(dev_path);
 
     return ret;
 }
