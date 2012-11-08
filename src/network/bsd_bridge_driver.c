@@ -1725,6 +1725,7 @@ static void
 networkRemoveGeneralIptablesRules(struct network_driver *driver,
                                   virNetworkObjPtr network)
 {
+#if 0
     int ii;
     virNetworkIpDefPtr ipv4def;
 
@@ -1751,6 +1752,7 @@ networkRemoveGeneralIptablesRules(struct network_driver *driver,
     }
     iptablesRemoveUdpInput(driver->iptables, AF_INET, network->def->bridge, 67);
     iptablesRemoveTcpInput(driver->iptables, AF_INET, network->def->bridge, 67);
+#endif
 }
 
 static int
@@ -1778,6 +1780,7 @@ networkRemoveIpSpecificIptablesRules(struct network_driver *driver,
                                      virNetworkObjPtr network,
                                      virNetworkIpDefPtr ipdef)
 {
+#if 0
     if (network->def->forwardType == VIR_NETWORK_FORWARD_NAT) {
         if (VIR_SOCKET_ADDR_IS_FAMILY(&ipdef->address, AF_INET))
             networkRemoveMasqueradingIptablesRules(driver, network, ipdef);
@@ -1786,6 +1789,7 @@ networkRemoveIpSpecificIptablesRules(struct network_driver *driver,
     } else if (network->def->forwardType == VIR_NETWORK_FORWARD_ROUTE) {
         networkRemoveRoutingIptablesRules(driver, network, ipdef);
     }
+#endif
 }
 
 /* Add all rules for all ip addresses (and general rules) on a network */
