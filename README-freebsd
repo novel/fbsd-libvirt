@@ -1,6 +1,6 @@
 Configuring:
 
- ./configure --with-qemu --disable-werror --with-qemu-group=wheel --without-polkit
+ ./configure --with-qemu --disable-werror --with-qemu-group=wheel --without-polkit --without-firewalld
 
 Basic Testing:
 
@@ -30,11 +30,11 @@ Basic Testing:
       <source dev='/path/to/freebsd.img'/>
       <target dev='hda' bus='ide'/>
     </disk>
-    <!--interface type='bridge'>
-      <mac address='52:54:00:00:01:89'/>
-      <source bridge='br0'/>
-    </interface-->
-    <input type='tablet' bus='usb'/> 
+    <interface type='bridge'>
+      <!--mac address='52:54:00:00:01:89'/-->
+      <source bridge='bridge0'/>
+    </interface>
+    <input type='tablet' bus='usb'/>
     <input type='mouse' bus='ps2'/>
     <graphics type='vnc' port='-1' listen='127.0.0.1'/>
   </devices>
