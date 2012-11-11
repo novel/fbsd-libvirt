@@ -553,7 +553,7 @@ B<Example>
 
  virsh dumpxml <domain> > domain.xml
  vi domain.xml (or make changes with your other text editor)
- virsh create < domain.xml
+ virsh create domain.xml
 
 =item B<define> I<FILE>
 
@@ -1124,11 +1124,14 @@ If I<--config> is specified, affect the next boot of a persistent guest.
 If I<--current> is specified, affect the current guest state.
 
 =item B<reboot> I<domain> [I<--mode acpi|agent>]
+=item B<restart> I<domain> [I<--mode acpi|agent>]
 
-Reboot a domain.  This acts just as if the domain had the B<reboot>
-command run from the console.  The command returns as soon as it has
-executed the reboot action, which may be significantly before the
-domain actually reboots.
+Restart a domain.  Depending on the hypervisor, this may request a
+shutdown followed by a fresh boot, rather than triggering a software
+reboot.  The command returns as soon as it has requested the reboot
+action, and depending on the guest, there may be a significant delay
+before the domain actually reboots, or the request might even be
+ignored.
 
 The exact behavior of a domain when it reboots is set by the
 I<on_reboot> parameter in the domain's XML definition.
@@ -1136,6 +1139,8 @@ I<on_reboot> parameter in the domain's XML definition.
 By default the hypervisor will try to pick a suitable shutdown
 method. To specify an alternative method, the I<--mode> parameter
 can specify C<acpi> or C<agent>.
+
+The command B<restart> is an alias for the older B<reboot>.
 
 =item B<reset> I<domain>
 
@@ -1523,6 +1528,7 @@ be hot-plugged the next time the domain is booted.  As such, it must only be
 used with the I<--config> flag, and not with the I<--live> flag.
 
 =item B<shutdown> I<domain> [I<--mode acpi|agent>]
+=item B<stop> I<domain> [I<--mode acpi|agent>]
 
 Gracefully shuts down a domain.  This coordinates with the domain OS
 to perform graceful shutdown, so there is no guarantee that it will
@@ -1541,7 +1547,11 @@ By default the hypervisor will try to pick a suitable shutdown
 method. To specify an alternative method, the I<--mode> parameter
 can specify C<acpi> or C<agent>.
 
+The command B<stop> is an alias for the older B<shutdown>.
+
 =item B<start> I<domain-name-or-uuid> [I<--console>] [I<--paused>]
+[I<--autodestroy>] [I<--bypass-cache>] [I<--force-boot>]
+=item B<boot> I<domain-name-or-uuid> [I<--console>] [I<--paused>]
 [I<--autodestroy>] [I<--bypass-cache>] [I<--force-boot>]
 
 Start a (previously defined) inactive domain, either from the last
@@ -1555,6 +1565,8 @@ exits.  If I<--bypass-cache> is specified, and managedsave state exists,
 the restore will avoid the file system cache, although this may slow
 down the operation.  If I<--force-boot> is specified, then any
 managedsave state is discarded and a fresh boot occurs.
+
+The command B<boot> is an alias for the older B<start>.
 
 =item B<suspend> I<domain>
 
@@ -2062,9 +2074,9 @@ the network; if a parent-index isn't provided, the "most appropriate"
 <dhcp> element), but if I<--parent-index> is given, that particular
 instance of <ip> will get the modification.
 
-If I<--live> is specified, affect a running guest.
-If I<--config> is specified, affect the next boot of a persistent guest.
-If I<--current> is specified, affect the current guest state.
+If I<--live> is specified, affect a running network.
+If I<--config> is specified, affect the next startup of a persistent network.
+If I<--current> is specified, affect the current network state.
 Both I<--live> and I<--config> flags may be given, but I<--current> is
 exclusive. Not specifying any flag is the same as specifying I<--current>.
 
@@ -2594,7 +2606,7 @@ used to represent properties of snapshots.
 
 =item B<snapshot-create> I<domain> [I<xmlfile>] {[I<--redefine> [I<--current>]]
 | [I<--no-metadata>] [I<--halt>] [I<--disk-only>] [I<--reuse-external>]
-[I<--quiesce>] [I<--atomic>]}
+[I<--quiesce>] [I<--atomic>] [I<--live>]}
 
 Create a snapshot for domain I<domain> with the properties specified in
 I<xmlfile>.  Normally, the only properties settable for a domain snapshot
@@ -2647,6 +2659,10 @@ this.  If this flag is not specified, then some hypervisors may fail
 after partially performing the action, and B<dumpxml> must be used to
 see whether any partial changes occurred.
 
+If I<--live> is specified, libvirt takes the snapshot while the guest is
+running. This increases the size of the memory image of the external
+checkpoint. This is currently supported only for external checkpoints.
+
 Existence of snapshot metadata will prevent attempts to B<undefine>
 a persistent domain.  However, for transient domains, snapshot
 metadata is silently lost when the domain quits running (whether
@@ -2654,8 +2670,8 @@ by command such as B<destroy> or by internal guest action).
 
 =item B<snapshot-create-as> I<domain> {[I<--print-xml>]
 | [I<--no-metadata>] [I<--halt>] [I<--reuse-external>]} [I<name>]
-[I<description>] [I<--disk-only> [I<--quiesce>] [I<--atomic>]
-[[I<--diskspec>] B<diskspec>]...]
+[I<description>] [I<--disk-only> [I<--quiesce>]] [I<--atomic>]
+[[I<--live>] [I<--memspec> B<memspec>]] [I<--diskspec>] B<diskspec>]...
 
 Create a snapshot for domain I<domain> with the given <name> and
 <description>; if either value is omitted, libvirt will choose a
@@ -2665,9 +2681,16 @@ Otherwise, if I<--halt> is specified, the domain will be left in an
 inactive state after the snapshot is created, and if I<--disk-only>
 is specified, the snapshot will not include vm state.
 
-The I<--disk-only> flag is used to request a disk-only snapshot.  When
-this flag is in use, the command can also take additional I<diskspec>
-arguments to add <disk> elements to the xml.  Each <diskspec> is in the
+The I<--memspec> option can be used to control whether a checkpoint
+is internal or external.  The I<--memspec> flag is mandatory, followed
+by a B<memspec> of the form B<[file=]name[,snapshot=type]>, where
+type can be B<none>, B<internal>, or B<external>.  To include a literal
+comma in B<file=name>, escape it with a second comma.
+
+The I<--diskspec> option can be used to control how I<--disk-only> and
+external checkpoints create external files.  This option can occur
+multiple times, according to the number of <disk> elements in the domain
+xml.  Each <diskspec> is in the
 form B<disk[,snapshot=type][,driver=type][,file=name]>.  To include a
 literal comma in B<disk> or in B<file=name>, escape it with a second
 comma.  A literal I<--diskspec> must precede each B<diskspec> unless
@@ -2699,6 +2722,10 @@ either succeeds, or fails with no changes; not all hypervisors support
 this.  If this flag is not specified, then some hypervisors may fail
 after partially performing the action, and B<dumpxml> must be used to
 see whether any partial changes occurred.
+
+If I<--live> is specified, libvirt takes the snapshot while the guest is
+running. This increases the size of the memory image of the external
+checkpoint. This is currently supported only for external checkpoints.
 
 =item B<snapshot-current> I<domain> {[I<--name>] | [I<--security-info>]
 | [I<snapshotname>]}

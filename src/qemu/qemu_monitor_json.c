@@ -3739,10 +3739,7 @@ qemuMonitorJSONBlockIoThrottleInfo(virJSONValuePtr result,
             goto cleanup;
         }
 
-       if(STRPREFIX(current_dev, QEMU_DRIVE_HOST_PREFIX))
-            current_dev += strlen(QEMU_DRIVE_HOST_PREFIX);
-
-        if (STREQ(current_dev, device))
+        if (STRNEQ(current_dev, device))
             continue;
 
         found = true;
