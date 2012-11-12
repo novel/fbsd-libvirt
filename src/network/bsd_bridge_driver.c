@@ -1846,6 +1846,7 @@ networkRemoveIptablesRules(struct network_driver *driver,
 static void
 networkReloadIptablesRules(struct network_driver *driver)
 {
+#if 0
     unsigned int i;
 
     VIR_INFO("Reloading iptables rules");
@@ -1868,6 +1869,7 @@ networkReloadIptablesRules(struct network_driver *driver)
         }
         virNetworkObjUnlock(network);
     }
+#endif
 }
 
 /* Enable IP Forwarding. Return 0 for success, -1 for failure. */
