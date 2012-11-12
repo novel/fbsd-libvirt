@@ -40,7 +40,11 @@
 
 static const struct cpuX86cpuid cpuidNull = { 0, 0, 0, 0, 0 };
 
+#if defined(__FreeBSD__)
+static const char *archs[] = { "i386", "amd64" };
+#else
 static const char *archs[] = { "i686", "x86_64" };
+#endif
 
 struct x86_vendor {
     char *name;
