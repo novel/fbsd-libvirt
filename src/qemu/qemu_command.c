@@ -279,7 +279,6 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
                                          tap_create_flags);
     VIR_WARN("%s, added ifname %s to bridge %s", __func__,
                   net->ifname, brname);
-    VIR_WARN("Audit stuff");
     virDomainAuditNetDevice(def, net, "/dev/net/tun", tapfd >= 0);
     if (err < 0) {
         if (template_ifname)
@@ -287,7 +286,6 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
         tapfd = -1;
     }
 
-    VIR_WARN("Mac filter");
     if (driver->macFilter) {
         if ((err = networkAllowMacOnPort(driver, net->ifname, &net->mac))) {
             virReportSystemError(err,
@@ -296,7 +294,6 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
         }
     }
 
-    VIR_WARN("Bandwidth");
     if (tapfd >= 0 &&
         virNetDevBandwidthSet(net->ifname,
                               virDomainNetGetActualBandwidth(net)) < 0) {
@@ -307,7 +304,6 @@ qemuNetworkIfaceConnect(virDomainDefPtr def,
         goto cleanup;
     }
 
-    VIR_WARN("NWFilter");
     if (tapfd >= 0) {
         if ((net->filter) && (net->ifname)) {
             if (virDomainConfNWFilterInstantiate(conn, def->uuid, net) < 0)
@@ -5481,14 +5477,12 @@ qemuBuildCommandLine(virConnectPtr conn,
                     if (tapfd < 0)
                         goto error;
 
-		    VIR_WARN("Afer 1");
                     last_good_net = i;
                     virCommandTransferFD(cmd, tapfd);
 
                     if (snprintf(tapfd_name, sizeof(tapfd_name), "%d",
                                  tapfd) >= sizeof(tapfd_name))
                         goto no_memory;
-		    VIR_WARN("After 2");
                 }
             } else if (actualType == VIR_DOMAIN_NET_TYPE_DIRECT) {
                 int tapfd = qemuPhysIfaceConnect(def, driver, net,
