@@ -201,46 +201,38 @@ cleanup:
 
 int virNetDevTapDelete(const char *ifname)
 {
-#if 0
-    struct ifreq try;
-    int fd;
+    int s;
+    struct ifreq ifr;
     int ret = -1;
 
-    if ((fd = open("/dev/net/tun", O_RDWR)) < 0) {
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
+    if (s < 0) {
         virReportSystemError(errno, "%s",
-                             _("Unable to open /dev/net/tun, is tun module loaded?"));
+                             _("Unable to create socket"));
         return -1;
     }
 
-    memset(&try, 0, sizeof(struct ifreq));
-    try.ifr_flags = IFF_TAP|IFF_NO_PI;
+    memset(&ifr, 0, sizeof(ifr));
 
-    if (virStrcpyStatic(try.ifr_name, ifname) == NULL) {
+    if (virStrcpyStatic(ifr.ifr_name, ifname) == NULL) {
         virReportSystemError(ERANGE,
                              _("Network interface name '%s' is too long"),
-                             ifname);
+                             *ifname);
         goto cleanup;
+
     }
 
-    if (ioctl(fd, TUNSETIFF, &try) < 0) {
-        virReportSystemError(errno, "%s",
-                             _("Unable to associate TAP device"));
-        goto cleanup;
-    }
-
-    if (ioctl(fd, TUNSETPERSIST, 0) < 0) {
-        virReportSystemError(errno, "%s",
-                             _("Unable to make TAP device non-persistent"));
+    if (ioctl(s, SIOCIFDESTROY, &ifr) < 0) {
+        virReportSystemError(errno,
+                             _("Unable to remove tap device %s"),
+                             NULLSTR(*ifname));
         goto cleanup;
     }
 
     ret = 0;
-
 cleanup:
-    VIR_FORCE_CLOSE(fd);
+    close(s);
     return ret;
-#endif
-    return 0;
 }
 
 /**

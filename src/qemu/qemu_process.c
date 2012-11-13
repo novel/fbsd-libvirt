@@ -4132,6 +4132,10 @@ void qemuProcessStop(struct qemud_driver *driver,
                              virDomainNetGetActualVirtPortProfile(net),
                              driver->stateDir));
             VIR_FREE(net->ifname);
+        } else if (virDomainNetGetActualType(net) == VIR_DOMAIN_NET_TYPE_BRIDGE) {
+            ignore_value(virNetDevBridgeRemovePort(virDomainNetGetActualBridgeName(net),
+                             net->ifname));
+            ignore_value(virNetDevTapDelete(net->ifname));
         }
         /* release the physical device (or any other resources used by
          * this interface in the network driver

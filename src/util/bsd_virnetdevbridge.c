@@ -355,44 +355,37 @@ cleanup:
  *
  * Returns 0 in case of success or an errno code in case of failure.
  */
-#ifdef SIOCBRDELIF
 int virNetDevBridgeRemovePort(const char *brname,
                               const char *ifname)
 {
-    int fd = -1;
+    int s;
     int ret = -1;
-    struct ifreq ifr;
+    struct ifdrv ifd;
+    struct ifbreq req;
 
-    if ((fd = virNetDevSetupControl(brname, &ifr)) < 0)
-        return -1;
+    VIR_WARN("Removing iface %s from bridge %s", ifname, brname);
+    memset(&req, 0, sizeof(req));
+    memset(&ifd, 0, sizeof(ifd));
+    strlcpy(req.ifbr_ifsname, ifname, sizeof(req.ifbr_ifsname));
+    strlcpy(ifd.ifd_name, brname, sizeof(ifd.ifd_name));
 
-    if (!(ifr.ifr_ifindex = if_nametoindex(ifname))) {
-        virReportSystemError(ENODEV,
-                             _("Unable to get interface index for %s"), ifname);
+    ifd.ifd_cmd = BRDGDEL;
+    ifd.ifd_len = sizeof(req);
+    ifd.ifd_data = &req;
 
-        goto cleanup;
-    }
+    s = socket(AF_LOCAL, SOCK_DGRAM, 0);
 
-    if (ioctl(fd, SIOCBRDELIF, &ifr) < 0) {
+    if (ioctl(s, SIOCSDRVSPEC, &ifd) < 0) {
         virReportSystemError(errno,
                              _("Unable to remove bridge %s port %s"), brname, ifname);
-        goto cleanup;
+         goto cleanup;
     }
 
     ret = 0;
 cleanup:
-    VIR_FORCE_CLOSE(fd);
+    close(s);
     return ret;
 }
-#else
-int virNetDevBridgeRemovePort(const char *brname,
-                              const char *ifname)
-{
-    virReportSystemError(ENOSYS,
-                         _("Unable to remove bridge %s port %s"), brname, ifname);
-    return -1;
-}
-#endif
 
 
 #ifdef __linux__
