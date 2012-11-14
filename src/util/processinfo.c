@@ -178,7 +178,11 @@ int virProcessInfoSetAffinity(pid_t pid, virBitmapPtr map)
 
 int virProcessInfoGetAffinity(pid_t pid, virBitmapPtr *map, int maxcpu)
 {
-//    VIR_WARN("%s: map = %s", __func__, virBitmapString(map));
+    *map = virBitmapNew(maxcpu);
+    if (!map) {
+        virReportOOMError();
+        return -1;
+    }
 
     return 0;
 }
