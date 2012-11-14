@@ -217,7 +217,7 @@ int virNetDevTapDelete(const char *ifname)
     if (virStrcpyStatic(ifr.ifr_name, ifname) == NULL) {
         virReportSystemError(ERANGE,
                              _("Network interface name '%s' is too long"),
-                             *ifname);
+                             ifname);
         goto cleanup;
 
     }
@@ -225,7 +225,7 @@ int virNetDevTapDelete(const char *ifname)
     if (ioctl(s, SIOCIFDESTROY, &ifr) < 0) {
         virReportSystemError(errno,
                              _("Unable to remove tap device %s"),
-                             NULLSTR(*ifname));
+                             ifname);
         goto cleanup;
     }
 
