@@ -1573,6 +1573,13 @@ uname_normalize(struct utsname *ut)
         ut->machine[3] == '6' &&
         ut->machine[4] == '\0')
         ut->machine[1] = '6';
+
+#if defined(__FreeBSD__)
+    /* We need to map 'amd64' -> 'x86_64' */
+    if (strncmp(ut->machine, "amd64", strlen(ut->machine) + 1) == 0) {
+       strlcpy(ut->machine, "x86_64", sizeof(ut->machine));
+    }
+#endif /* defined(__FreeBSD__) */
 }
 
 int qemuCapsGetDefaultVersion(virCapsPtr caps,
