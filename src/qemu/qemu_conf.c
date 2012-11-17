@@ -34,9 +34,9 @@
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <sys/utsname.h>
-
-// XXX
-//#include <mntent.h>
+#ifdef HAVE_MNTENT_H
+#include <mntent.h>
+#endif /* HAVE_MNTENT_H */
 
 #include "virterror_internal.h"
 #include "qemu_conf.h"
