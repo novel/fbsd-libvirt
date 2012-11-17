@@ -52,3 +52,14 @@ Now you can log in using vnc:
 vncview :0
 
 To stop the VM, use 'shutdown vm1' inside virsh.
+
+To allow a VM have internet connection:
+
+
+ipfw nat 1000 config if re0
+
+ipfw add 1000 nat 1000 log ip from 192.168.122.0/24 to any out
+ipfw add 1001 nat 1000 log ip from any to any in
+
+Here, re0 is the uplink connection and 192.168.122.0/24 is a bridge network.
+
