@@ -51,7 +51,7 @@ augeastest_DATA =
 
 # These files are not related to driver APIs. Simply generic
 # helper APIs for various purposes
-if BUILD_FREEBSD
+if WITH_FREEBSD
 NETDEV = util/bsd_virnetdevtap.h util/bsd_virnetdevtap.c \
 	 util/bsd_virnetdevbridge.h util/bsd_virnetdevbridge.c
 else
@@ -560,7 +560,7 @@ PARALLELS_DRIVER_SOURCES =					\
 		parallels/parallels_utils.h			\
 		parallels/parallels_storage.c
 
-if BUILD_FREEBSD
+if WITH_FREEBSD
 NETWORK_DRIVER_SOURCES =					\
 		network/bsd_bridge_driver.h network/bsd_bridge_driver.c
 else

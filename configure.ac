@@ -146,20 +146,6 @@ VERSION_SCRIPT_FLAGS=-Wl,--version-script=
     VERSION_SCRIPT_FLAGS="-Wl,-M -Wl,"
 AC_MSG_RESULT([$VERSION_SCRIPT_FLAGS])
 
-uname=`uname`
-
-case $uname in
-  Linux*)
-    BUILD_LINUX=true
-    ;;
-  FreeBSD*)
-    BUILD_FREEBSD=true
-    ;;
-esac
-
-AM_CONDITIONAL(BUILD_LINUX, test x$BUILD_LINUX = xtrue)
-AM_CONDITIONAL(BUILD_FREEBSD, test x$BUILD_FREEBSD = xtrue)
-
 LIBVIRT_COMPILE_WARNINGS
 
 AC_MSG_CHECKING([for CPUID instruction])
@@ -373,10 +359,11 @@ dnl are also linux specific.  The "network" and storage_fs drivers are known
 dnl to not work on MacOS X presently, so we also make a note if compiling
 dnl for that
 
-with_linux=no with_osx=no
+with_linux=no with_osx=no with_freebsd=no
 case $host in
   *-*-linux*) with_linux=yes ;;
   *-*-darwin*) with_osx=yes ;;
+  *-*-freebsd*) with_freebsd=yes ;;
 esac
 
 if test $with_linux = no; then
@@ -392,6 +379,7 @@ if test $with_linux = no; then
 fi
 
 AM_CONDITIONAL([WITH_LINUX], [test "$with_linux" = "yes"])
+AM_CONDITIONAL([WITH_FREEBSD], [test "$with_freebsd" = "yes"])
 
 dnl Allow to build without Xen, QEMU/KVM, test or remote driver
 AC_ARG_WITH([xen],
@@ -546,7 +534,7 @@ AC_DEFINE_UNQUOTED([IP6TABLES_PATH], "$IP6TABLES_PATH", [path to ip6tables binar
 AC_PATH_PROG([EBTABLES_PATH], [ebtables], /sbin/ebtables, [/usr/sbin:$PATH])
 AC_DEFINE_UNQUOTED([EBTABLES_PATH], "$EBTABLES_PATH", [path to ebtables binary])
 
-if test x$BUILD_FREEBSD = xtrue; then
+if test "$with_freebsd" = "yes"; then
     AC_PATH_PROG([IFCONFIG_PATH], [ifconfig], /sbin/ifconfig, [/usr/sbin:$PATH])
     AC_DEFINE_UNQUOTED([IFCONFIG_PATH], "$IFCONFIG_PATH", [path to ifconfig binary])
 fi
@@ -969,7 +957,7 @@ dnl
 dnl check for kernel headers required by src/bridge.c
 dnl
 
-if test "x$BUILD_LINUX" != x; then
+if test "$with_linux" = "yes"; then
    if test "$with_qemu" = "yes" || test "$with_lxc" = "yes" ; then
       AC_CHECK_HEADERS([linux/param.h linux/sockios.h linux/if_bridge.h linux/if_tun.h],,
                     AC_MSG_ERROR([You must install kernel-headers in order to compile libvirt with QEMU or LXC support]))
