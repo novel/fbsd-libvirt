@@ -26,6 +26,7 @@
 #include "virterror_internal.h"
 #include "util.h"
 #include "virfile.h"
+#include "command.h"
 #include "memory.h"
 #include "intprops.h"
 #include "logging.h"
@@ -237,13 +238,19 @@ cleanup:
 #elif defined __FreeBSD__
 int virNetDevBridgeCreate(const char *brname)
 {
-    const char *ifcfgfmt = "/sbin/ifconfig %s create";
-    char cmdbuffer[64];
+    virCommandPtr cmd = NULL;
     int ret = -1;
 
-    VIR_WARN("Creating bridge %s", brname);
-    sprintf (cmdbuffer, ifcfgfmt, brname);
-    ret = system (cmdbuffer);
+    cmd = virCommandNew(IFCONFIG_PATH);
+    virCommandAddArgList(cmd, brname, "create", NULL);
+
+    if (virCommandRun(cmd, NULL) < 0)
+        goto cleanup;
+
+    ret = 0;
+
+cleanup:
+    virCommandFree(cmd);
     return ret;
 }
 #else
@@ -287,13 +294,19 @@ cleanup:
 #elif defined __FreeBSD__
 int virNetDevBridgeDelete(const char *brname)
 {
-    const char *ifcfgfmt = "/sbin/ifconfig %s destroy";
-    char cmdbuffer[64];
+    virCommandPtr cmd = NULL;
     int ret = -1;
 
-    VIR_WARN("Deleting bridge %s", brname);
-    sprintf (cmdbuffer, ifcfgfmt, brname);
-    ret = system (cmdbuffer);
+    cmd = virCommandNew(IFCONFIG_PATH);
+    virCommandAddArgList(cmd, brname, "destroy", NULL);
+
+    if (virCommandRun(cmd, NULL) < 0)
+        goto cleanup;
+
+    ret = 0;
+
+cleanup:
+    virCommandFree(cmd);
     return ret;
 }
 #else
