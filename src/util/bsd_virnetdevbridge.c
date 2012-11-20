@@ -37,14 +37,6 @@
 #include <net/ethernet.h>
 #include <net/if_bridgevar.h>
 
-#ifdef __linux__
-# include <linux/sockios.h>
-# include <linux/param.h>     /* HZ                 */
-# include <linux/if_bridge.h> /* SYSFS_BRIDGE_ATTR  */
-
-# define JIFFIES_TO_MS(j) (((j)*1000)/HZ)
-# define MS_TO_JIFFIES(ms) (((ms)*HZ)/1000)
-#endif
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 
@@ -214,28 +206,6 @@ cleanup:
  *
  * Returns 0 in case of success or -1 on failure
  */
-#ifdef SIOCBRADDBR
-int virNetDevBridgeCreate(const char *brname)
-{
-    int fd = -1;
-    int ret = -1;
-
-    if ((fd = virNetDevSetupControl(NULL, NULL)) < 0)
-        return -1;
-
-    if (ioctl(fd, SIOCBRADDBR, brname) < 0) {
-        virReportSystemError(errno,
-                             _("Unable to create bridge %s"), brname);
-        goto cleanup;
-    }
-
-    ret = 0;
-
-cleanup:
-    VIR_FORCE_CLOSE(fd);
-    return ret;
-}
-#elif defined __FreeBSD__
 int virNetDevBridgeCreate(const char *brname)
 {
     virCommandPtr cmd = NULL;
@@ -253,14 +223,6 @@ cleanup:
     virCommandFree(cmd);
     return ret;
 }
-#else
-int virNetDevBridgeCreate(const char *brname)
-{
-    virReportSystemError(ENOSYS,
-                         _("Unable to create bridge %s"), brname);
-    return -1;
-}
-#endif
 
 /**
  * virNetDevBridgeDelete:
@@ -270,28 +232,6 @@ int virNetDevBridgeCreate(const char *brname)
  *
  * Returns 0 in case of success or an errno code in case of failure.
  */
-#ifdef SIOCBRDELBR
-int virNetDevBridgeDelete(const char *brname)
-{
-    int fd = -1;
-    int ret = -1;
-
-    if ((fd = virNetDevSetupControl(NULL, NULL)) < 0)
-        return -1;
-
-    if (ioctl(fd, SIOCBRDELBR, brname) < 0) {
-        virReportSystemError(errno,
-                             _("Unable to delete bridge %s"), brname);
-        goto cleanup;
-    }
-
-    ret = 0;
-
-cleanup:
-    VIR_FORCE_CLOSE(fd);
-    return ret;
-}
-#elif defined __FreeBSD__
 int virNetDevBridgeDelete(const char *brname)
 {
     virCommandPtr cmd = NULL;
@@ -309,14 +249,6 @@ cleanup:
     virCommandFree(cmd);
     return ret;
 }
-#else
-int virNetDevBridgeDelete(const char *brname ATTRIBUTE_UNUSED)
-{
-    virReportSystemError(ENOSYS,
-                         _("Unable to delete bridge %s"), brname);
-    return EINVAL;
-}
-#endif
 
 /**
  * virNetDevBridgeAddPort:
